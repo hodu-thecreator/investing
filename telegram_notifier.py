@@ -8,6 +8,9 @@ Bot Token과 Chat ID는 .env 파일에서 읽습니다.
 import os
 import requests
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
