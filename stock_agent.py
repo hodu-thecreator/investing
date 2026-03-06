@@ -1,68 +1,41 @@
-#!/usr/bin/env python3
 """
-Stock Investment Assistant Agent
-매일 아침 포트폴리오 종목의 현재가, 고점 대비 하락률, 이평선 분석을 제공합니다.
+주식/암호화폐 브리핑 에이전트
+- Yahoo Finance: 나스닥, S&P500, 관심 종목
+- CoinGecko: 암호화폐 시세
+- Claude API: 데이터 분석 및 요약
 """
 
-import yfinance as yf
+import aiohttp
+import anthropic
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
+import pytz
+import yfinance as yf
 import warnings
+from config import Config
+
 warnings.filterwarnings("ignore")
 
-# ── 포트폴리오 설정 ──────────────────────────────────────────────
-PORTFOLIO = ["SPYM", "QQQM", "TQQQ", "UPRO", "CCJ", "VRT", "CEG", "COPX", "ETN"]
+config = Config()
+client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
-# 고점 대비 하락 시 레버리지 매수 알림 기준 (%)
-ALERT_THRESHOLDS = [-5, -10, -15, -20]
+MODEL = "claude-haiku-4-5-20251001"
 
-# 이평선 기간 설정
+# daily_report.py 호환 상수
+PORTFOLIO = config.WATCH_STOCKS
 MA_PERIODS = [5, 20, 50, 100, 200]
 
-# ── 데이터 수집 ──────────────────────────────────────────────────
+
+# ── daily_report.py 호환 함수 ────────────────────────────────────
 
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     """yfinance로 주가 데이터 가져오기"""
     try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period=period)
-        return df
-    except Exception as e:
-        print(f"  [오류] {ticker} 데이터 수집 실패: {e}")
+        df = yf.Ticker(ticker).history(period=period)
+        return df if df is not None else pd.DataFrame()
+    except Exception:
         return pd.DataFrame()
 
-
-def get_analyst_target(ticker: str) -> dict:
-    """애널리스트 목표주가 및 추천 가져오기"""
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        return {
-            "target_mean": info.get("targetMeanPrice"),
-            "target_low": info.get("targetLowPrice"),
-            "target_high": info.get("targetHighPrice"),
-            "recommendation": info.get("recommendationKey", "N/A").upper(),
-        }
-    except Exception:
-        return {"target_mean": None, "target_low": None, "target_high": None, "recommendation": "N/A"}
-
-
-def get_latest_news(ticker: str, max_items: int = 3) -> list[str]:
-    """종목 최신 뉴스 헤드라인 가져오기"""
-    try:
-        stock = yf.Ticker(ticker)
-        news = stock.news or []
-        headlines = []
-        for item in news[:max_items]:
-            content = item.get("content", {})
-            title = content.get("title") or item.get("title", "")
-            if title:
-                headlines.append(f"  • {title}")
-        return headlines
-    except Exception:
-        return []
-
-# ── 분석 함수 ────────────────────────────────────────────────────
 
 def calc_moving_averages(df: pd.DataFrame) -> dict:
     """이평선 현재값 계산"""
@@ -79,186 +52,159 @@ def calc_moving_averages(df: pd.DataFrame) -> dict:
 def calc_drawdown_from_high(df: pd.DataFrame, lookback_days: int = 252) -> dict:
     """52주 고점 대비 현재 하락률 계산"""
     if df.empty:
-        return {}
+        return {"current": 0, "high": 0, "drawdown_pct": 0}
     recent = df["Close"].tail(lookback_days)
-    high_52w = recent.max()
+    high = recent.max()
     current = recent.iloc[-1]
-    drawdown_pct = (current - high_52w) / high_52w * 100
-    return {
-        "current": current,
-        "high_52w": high_52w,
-        "drawdown_pct": drawdown_pct,
-    }
+    drawdown_pct = (current - high) / high * 100 if high else 0
+    return {"current": current, "high": high, "drawdown_pct": drawdown_pct}
 
 
-def ma_position_label(current: float, mas: dict) -> str:
-    """현재가 대비 이평선 위치 요약 (위 ↑ / 아래 ↓)"""
-    if not mas:
-        return "N/A"
-    parts = []
-    for period in sorted(mas):
-        symbol = "↑" if current >= mas[period] else "↓"
-        parts.append(f"{period}일{symbol}")
-    return "  ".join(parts)
+# ── StockAgent 클래스 ────────────────────────────────────────────
 
+class StockAgent:
 
-def buy_alerts(ticker: str, drawdown_pct: float) -> list[str]:
-    """고점 대비 하락 임계치 도달 시 알림 메시지 생성"""
-    alerts = []
-    for threshold in ALERT_THRESHOLDS:
-        if drawdown_pct <= threshold:
-            alerts.append(
-                f"  🔔 {ticker} 고점 대비 {abs(threshold)}% 이상 하락 → 분할매수 검토"
-            )
-            break  # 가장 낮은 임계치 하나만 표시
-    return alerts
+    async def get_market_indices(self) -> dict:
+        """나스닥, S&P500 데이터 수집"""
+        indices = {
+            "^IXIC": "나스닥",
+            "^GSPC": "S&P500",
+            "^DJI": "다우존스",
+        }
+        result = {}
+        for ticker, name in indices.items():
+            try:
+                data = yf.Ticker(ticker)
+                info = data.fast_info
+                current = info.last_price
+                prev_close = info.previous_close
+                change = current - prev_close
+                change_pct = (change / prev_close) * 100
+                result[name] = {
+                    "price": f"{current:,.2f}",
+                    "change": f"{change:+,.2f}",
+                    "change_pct": f"{change_pct:+.2f}%",
+                    "emoji": "🟢" if change >= 0 else "🔴"
+                }
+            except Exception as e:
+                result[name] = {"error": str(e)}
+        return result
 
-# ── 시장 온도 체크 ────────────────────────────────────────────────
+    async def get_watch_stocks(self) -> dict:
+        """관심 종목 데이터"""
+        result = {}
+        for ticker in config.WATCH_STOCKS:
+            try:
+                data = yf.Ticker(ticker.strip())
+                info = data.fast_info
+                current = info.last_price
+                prev_close = info.previous_close
+                change_pct = ((current - prev_close) / prev_close) * 100
+                result[ticker.strip()] = {
+                    "price": f"${current:,.2f}",
+                    "change_pct": f"{change_pct:+.2f}%",
+                    "emoji": "🟢" if change_pct >= 0 else "🔴"
+                }
+            except Exception as e:
+                result[ticker.strip()] = {"error": str(e)}
+        return result
 
-def market_temperature() -> str:
-    """S&P500 구성 종목 중 200일선 위 비율로 시장 과열/침체 판단"""
-    # S&P500 지수 자체를 대용으로 사용
-    try:
-        spy = yf.Ticker("SPY")
-        df = spy.history(period="1y")
-        if df.empty:
-            return "시장 데이터 없음"
-        close = df["Close"]
-        ma200 = close.rolling(200).mean().iloc[-1]
-        current = close.iloc[-1]
-        pct_above = (current - ma200) / ma200 * 100
+    async def get_crypto(self) -> dict:
+        """암호화폐 시세 (CoinGecko 무료 API)"""
+        ids = ",".join(config.WATCH_CRYPTO)
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids}&vs_currencies=usd&include_24hr_change=true"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    data = await resp.json()
+            result = {}
+            name_map = {
+                "bitcoin": "비트코인(BTC)",
+                "ethereum": "이더리움(ETH)",
+                "solana": "솔라나(SOL)",
+                "ripple": "리플(XRP)",
+            }
+            for coin_id, values in data.items():
+                name = name_map.get(coin_id, coin_id.upper())
+                price = values.get("usd", 0)
+                change = values.get("usd_24h_change", 0)
+                result[name] = {
+                    "price": f"${price:,.2f}",
+                    "change_pct": f"{change:+.2f}%",
+                    "emoji": "🟢" if change >= 0 else "🔴"
+                }
+            return result
+        except Exception as e:
+            return {"error": str(e)}
 
-        if pct_above > 10:
-            label = "과매수 (주의)"
-        elif pct_above > 0:
-            label = "상승 추세"
-        elif pct_above > -10:
-            label = "200일선 하회 (조심)"
-        else:
-            label = "침체 구간 (기회 탐색)"
+    async def generate_report(self) -> str:
+        """전체 브리핑 리포트 생성"""
+        kst = pytz.timezone('Asia/Seoul')
+        now = datetime.now(kst)
+        date_str = now.strftime("%Y년 %m월 %d일 (%a)")
 
-        return f"SPY {current:.2f} / 200MA {ma200:.2f} ({pct_above:+.1f}%)  → {label}"
-    except Exception as e:
-        return f"시장 온도 계산 실패: {e}"
+        indices = await self.get_market_indices()
+        stocks = await self.get_watch_stocks()
+        crypto = await self.get_crypto()
 
-# ── 메인 리포트 출력 ─────────────────────────────────────────────
+        raw_data = f"""
+날짜: {date_str}
 
-def print_report(show_news: bool = True):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    print("=" * 70)
-    print(f"  📈  주식 투자 도우미  |  {now}")
-    print("=" * 70)
+[주요 지수]
+{self._format_indices(indices)}
 
-    # 시장 온도
-    print("\n[시장 온도]")
-    print(f"  {market_temperature()}")
+[관심 종목]
+{self._format_stocks(stocks)}
 
-    all_alerts = []
+[암호화폐]
+{self._format_crypto(crypto)}
+        """
 
-    print("\n[포트폴리오 현황]")
-    print(f"{'종목':<8} {'현재가':>8} {'52주고점':>10} {'하락률':>8}  이평선 위치")
-    print("-" * 70)
+        message = client.messages.create(
+            model=MODEL,
+            max_tokens=1000,
+            messages=[{
+                "role": "user",
+                "content": f"""아래 주식/암호화폐 데이터를 바탕으로 간결하고 통찰력 있는 아침 브리핑을 작성해줘.
+텔레그램 메시지용으로 이모지를 적절히 사용하고 Markdown 형식으로 작성해줘.
 
-    for ticker in PORTFOLIO:
-        df = fetch_stock_data(ticker)
-        if df.empty:
-            print(f"{ticker:<8}  데이터 없음")
-            continue
+형식:
+1. 한 줄 시장 요약
+2. 주요 지수 현황
+3. 관심 종목 하이라이트 (눈에 띄는 종목 위주)
+4. 암호화폐 현황
+5. 오늘 주목할 포인트 (간단히 1-2줄)
 
-        dd = calc_drawdown_from_high(df)
-        mas = calc_moving_averages(df)
-        current = dd.get("current", 0)
-        high = dd.get("high_52w", 0)
-        drawdown = dd.get("drawdown_pct", 0)
+{raw_data}
+"""
+            }]
+        )
 
-        ma_label = ma_position_label(current, mas)
-        print(f"{ticker:<8} ${current:>7.2f}  ${high:>8.2f}  {drawdown:>+6.1f}%  {ma_label}")
+        header = f"📊 *{date_str} 아침 브리핑*\n\n"
+        return header + message.content[0].text
 
-        alerts = buy_alerts(ticker, drawdown)
-        all_alerts.extend(alerts)
-
-    # 이평선 상세
-    print("\n[이평선 상세 (현재가 기준)]")
-    print(f"{'종목':<8} {'5일':>7} {'20일':>7} {'50일':>7} {'100일':>8} {'200일':>8}")
-    print("-" * 50)
-    for ticker in PORTFOLIO:
-        df = fetch_stock_data(ticker)
-        if df.empty:
-            continue
-        mas = calc_moving_averages(df)
-        current = df["Close"].iloc[-1]
-        row = f"{ticker:<8}"
-        for p in MA_PERIODS:
-            ma_val = mas.get(p)
-            if ma_val:
-                diff = (current - ma_val) / ma_val * 100
-                row += f"  {diff:>+5.1f}%"
+    def _format_indices(self, data: dict) -> str:
+        lines = []
+        for name, values in data.items():
+            if "error" in values:
+                lines.append(f"  {name}: 데이터 오류")
             else:
-                row += f"  {'N/A':>5}"
-        print(row)
+                lines.append(f"  {values['emoji']} {name}: {values['price']} ({values['change_pct']})")
+        return "\n".join(lines)
 
-    # 애널리스트 목표주가
-    print("\n[애널리스트 목표주가]")
-    print(f"{'종목':<8} {'추천':<12} {'평균목표':>10} {'저':>8} {'고':>8}")
-    print("-" * 50)
-    for ticker in PORTFOLIO:
-        info = get_analyst_target(ticker)
-        rec = info["recommendation"]
-        mean = f"${info['target_mean']:.2f}" if info["target_mean"] else "  N/A"
-        low = f"${info['target_low']:.2f}" if info["target_low"] else "  N/A"
-        high = f"${info['target_high']:.2f}" if info["target_high"] else "  N/A"
-        print(f"{ticker:<8} {rec:<12} {mean:>10} {low:>8} {high:>8}")
+    def _format_stocks(self, data: dict) -> str:
+        lines = []
+        for ticker, values in data.items():
+            if "error" in values:
+                lines.append(f"  {ticker}: 데이터 오류")
+            else:
+                lines.append(f"  {values['emoji']} {ticker}: {values['price']} ({values['change_pct']})")
+        return "\n".join(lines)
 
-    # 매수 알림
-    if all_alerts:
-        print("\n[매수 타이밍 알림]")
-        for alert in all_alerts:
-            print(alert)
-
-    # 뉴스
-    if show_news:
-        print("\n[종목별 최신 뉴스]")
-        for ticker in PORTFOLIO:
-            headlines = get_latest_news(ticker)
-            if headlines:
-                print(f"\n  [{ticker}]")
-                for h in headlines:
-                    print(h)
-
-    print("\n" + "=" * 70)
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="주식 투자 도우미 에이전트")
-    parser.add_argument("--no-news", action="store_true", help="뉴스 출력 생략")
-    parser.add_argument(
-        "--ticker",
-        type=str,
-        help="단일 종목 빠른 조회 (예: --ticker AAPL)",
-    )
-    args = parser.parse_args()
-
-    if args.ticker:
-        t = args.ticker.upper()
-        df = fetch_stock_data(t)
-        dd = calc_drawdown_from_high(df)
-        mas = calc_moving_averages(df)
-        analyst = get_analyst_target(t)
-        news = get_latest_news(t)
-
-        print(f"\n[{t} 단일 종목 분석]")
-        print(f"  현재가   : ${dd.get('current', 0):.2f}")
-        print(f"  52주 고점: ${dd.get('high_52w', 0):.2f}")
-        print(f"  고점 대비: {dd.get('drawdown_pct', 0):+.1f}%")
-        print(f"  이평선   : {ma_position_label(dd.get('current', 0), mas)}")
-        print(f"  추천     : {analyst['recommendation']}")
-        if analyst["target_mean"]:
-            print(f"  목표주가 : ${analyst['target_mean']:.2f} (저 ${analyst['target_low']:.2f} / 고 ${analyst['target_high']:.2f})")
-        if news:
-            print("  최신뉴스 :")
-            for h in news:
-                print(h)
-    else:
-        print_report(show_news=not args.no_news)
+    def _format_crypto(self, data: dict) -> str:
+        if "error" in data:
+            return f"  데이터 오류: {data['error']}"
+        lines = []
+        for name, values in data.items():
+            lines.append(f"  {values['emoji']} {name}: {values['price']} ({values['change_pct']})")
+        return "\n".join(lines)
