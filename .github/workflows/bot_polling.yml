@@ -1,0 +1,48 @@
+name: Telegram Bot Polling
+
+on:
+  schedule:
+    # 매 분 실행 → 사실상 양방향 봇
+    - cron: "* * * * *"
+  workflow_dispatch:
+
+jobs:
+  handle-commands:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore bot state (last processed update_id)
+        uses: actions/cache@v4
+        with:
+          path: .bot_state.json
+          key: bot-state-${{ github.run_id }}
+          restore-keys: |
+            bot-state-
+
+      - name: Handle pending Telegram commands
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          WATCH_STOCKS: ${{ secrets.WATCH_STOCKS }}
+        run: python bot_once.py
+
+      - name: Save bot state
+        uses: actions/cache@v4
+        if: always()
+        with:
+          path: .bot_state.json
+          key: bot-state-${{ github.run_id }}
