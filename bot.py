@@ -52,55 +52,66 @@ def _reply(chat_id: int, text: str):
 # ── 명령어 핸들러 ──────────────────────────────────────────────
 
 def handle_report(chat_id: int):
-    _reply(chat_id, "⏳ 분석 중... 잠시만 기다려주세요.")
-    report = build_report()
-    _reply(chat_id, report)
+    try:
+        _reply(chat_id, "⏳ 분석 중... 잠시만 기다려주세요.")
+        report = build_report()
+        _reply(chat_id, report)
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        print(f"[handle_report] 오류:\n{tb}")
+        _reply(chat_id, f"❌ 오류 발생:\n<code>{e}</code>")
 
 
 def handle_check(chat_id: int, ticker: str):
-    ticker = ticker.upper().strip()
-    if not ticker:
-        _reply(chat_id, "❌ 사용법: /check TICKER  (예: /check TQQQ)")
-        return
+    try:
+        ticker = ticker.upper().strip()
+        if not ticker:
+            _reply(chat_id, "❌ 사용법: /check TICKER  (예: /check TQQQ)")
+            return
 
-    _reply(chat_id, f"⏳ {ticker} 분석 중...")
-    indicators = collect_all()
-    mkt_s, mkt_reasons = market_score(indicators)
-    result = judge_ticker(ticker, mkt_s)
+        _reply(chat_id, f"⏳ {ticker} 분석 중...")
+        indicators = collect_all()
+        mkt_s, mkt_reasons = market_score(indicators)
+        result = judge_ticker(ticker, mkt_s)
 
-    action = result["action"]
-    price  = result["price"]
-    dd     = result["drawdown"]
-    reasons = result["reasons"]
-    score  = result["score"]
+        action = result["action"]
+        price  = result["price"]
+        dd     = result["drawdown"]
+        reasons = result["reasons"]
+        score  = result["score"]
 
-    mkt_label = (
-        "🟢 매수 우호적" if mkt_s >= 4 else
-        "🟡 중립" if mkt_s >= 2 else
-        "🔴 리스크 높음" if mkt_s <= -2 else
-        "⚪ 중립"
-    )
+        mkt_label = (
+            "🟢 매수 우호적" if mkt_s >= 4 else
+            "🟡 중립" if mkt_s >= 2 else
+            "🔴 리스크 높음" if mkt_s <= -2 else
+            "⚪ 중립"
+        )
 
-    lines = [
-        f"<b>{ticker} 즉시 분석</b>  {datetime.now().strftime('%H:%M')}",
-        "",
-        f"현재가   : <b>${price:.2f}</b>",
-        f"고점 대비: <b>{dd:+.1f}%</b>",
-        f"종합점수 : {score:+d}",
-        "",
-        f"시장 환경: {mkt_label}",
-    ]
-    if mkt_reasons:
-        lines.append("  " + " · ".join(mkt_reasons))
+        lines = [
+            f"<b>{ticker} 즉시 분석</b>  {datetime.now().strftime('%H:%M')}",
+            "",
+            f"현재가   : <b>${price:.2f}</b>",
+            f"고점 대비: <b>{dd:+.1f}%</b>",
+            f"종합점수 : {score:+d}",
+            "",
+            f"시장 환경: {mkt_label}",
+        ]
+        if mkt_reasons:
+            lines.append("  " + " · ".join(mkt_reasons))
 
-    lines += [
-        "",
-        f"<b>판단: {action}</b>",
-    ]
-    if reasons:
-        lines.append("<i>" + " · ".join(reasons) + "</i>")
+        lines += [
+            "",
+            f"<b>판단: {action}</b>",
+        ]
+        if reasons:
+            lines.append("<i>" + " · ".join(reasons) + "</i>")
 
-    _reply(chat_id, "\n".join(lines))
+        _reply(chat_id, "\n".join(lines))
+    except Exception as e:
+        import traceback
+        print(f"[handle_check] 오류:\n{traceback.format_exc()}")
+        _reply(chat_id, f"❌ 오류 발생:\n<code>{e}</code>")
 
 
 def handle_help(chat_id: int):

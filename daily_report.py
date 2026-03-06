@@ -11,16 +11,40 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import os
+import pandas as pd
 import yfinance as yf
-from stock_agent import (
-    PORTFOLIO,
-    MA_PERIODS,
-    fetch_stock_data,
-    calc_moving_averages,
-    calc_drawdown_from_high,
-)
 from market_indicators import collect_all
 from telegram_notifier import send_message
+
+# ── 포트폴리오 설정 ──────────────────────────────────────────────
+PORTFOLIO = os.getenv("WATCH_STOCKS", "SPYM,QQQM,TQQQ,UPRO,CCJ,VRT,CEG,COPX,ETN").split(",")
+MA_PERIODS = [20, 50, 200]
+
+
+def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
+    try:
+        df = yf.Ticker(ticker).history(period=period)
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def calc_moving_averages(df: pd.DataFrame) -> dict:
+    result = {}
+    for p in MA_PERIODS:
+        if len(df) >= p:
+            result[p] = df["Close"].rolling(p).mean().iloc[-1]
+    return result
+
+
+def calc_drawdown_from_high(df: pd.DataFrame) -> dict:
+    if df.empty:
+        return {"current": 0, "high": 0, "drawdown_pct": 0}
+    current = df["Close"].iloc[-1]
+    high = df["Close"].max()
+    drawdown_pct = (current - high) / high * 100 if high else 0
+    return {"current": current, "high": high, "drawdown_pct": drawdown_pct}
 
 
 # ── 시장 환경 점수 (-10 ~ +10, 양수 = 매수 우호적) ──────────────
