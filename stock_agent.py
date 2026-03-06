@@ -7,17 +7,63 @@
 
 import aiohttp
 import anthropic
+import pandas as pd
 from datetime import datetime
 import pytz
 import yfinance as yf
+import warnings
 from config import Config
+
+warnings.filterwarnings("ignore")
 
 config = Config()
 client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
+MODEL = "claude-haiku-4-5-20251001"
+
+# daily_report.py 호환 상수
+PORTFOLIO = config.WATCH_STOCKS
+MA_PERIODS = [5, 20, 50, 100, 200]
+
+
+# ── daily_report.py 호환 함수 ────────────────────────────────────
+
+def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
+    """yfinance로 주가 데이터 가져오기"""
+    try:
+        df = yf.Ticker(ticker).history(period=period)
+        return df if df is not None else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def calc_moving_averages(df: pd.DataFrame) -> dict:
+    """이평선 현재값 계산"""
+    if df.empty:
+        return {}
+    result = {}
+    close = df["Close"]
+    for period in MA_PERIODS:
+        if len(close) >= period:
+            result[period] = close.rolling(period).mean().iloc[-1]
+    return result
+
+
+def calc_drawdown_from_high(df: pd.DataFrame, lookback_days: int = 252) -> dict:
+    """52주 고점 대비 현재 하락률 계산"""
+    if df.empty:
+        return {"current": 0, "high": 0, "drawdown_pct": 0}
+    recent = df["Close"].tail(lookback_days)
+    high = recent.max()
+    current = recent.iloc[-1]
+    drawdown_pct = (current - high) / high * 100 if high else 0
+    return {"current": current, "high": high, "drawdown_pct": drawdown_pct}
+
+
+# ── StockAgent 클래스 ────────────────────────────────────────────
 
 class StockAgent:
-    
+
     async def get_market_indices(self) -> dict:
         """나스닥, S&P500 데이터 수집"""
         indices = {
@@ -97,12 +143,10 @@ class StockAgent:
         now = datetime.now(kst)
         date_str = now.strftime("%Y년 %m월 %d일 (%a)")
 
-        # 데이터 수집
         indices = await self.get_market_indices()
         stocks = await self.get_watch_stocks()
         crypto = await self.get_crypto()
 
-        # 데이터를 텍스트로 변환
         raw_data = f"""
 날짜: {date_str}
 
@@ -116,9 +160,8 @@ class StockAgent:
 {self._format_crypto(crypto)}
         """
 
-        # Claude로 분석 및 요약
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model=MODEL,
             max_tokens=1000,
             messages=[{
                 "role": "user",
@@ -136,7 +179,7 @@ class StockAgent:
 """
             }]
         )
-        
+
         header = f"📊 *{date_str} 아침 브리핑*\n\n"
         return header + message.content[0].text
 
