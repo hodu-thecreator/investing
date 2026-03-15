@@ -240,7 +240,7 @@ def build_report() -> str:
         lines.append("\n⚪ <b>홀딩</b>")
         lines.extend(hold_list)
 
-    lines.append("\n━" * 15)
+    lines.append("\n" + "━" * 15)
     lines.append("🤖 <i>Stock Agent — 매일 08:00 자동 발송</i>")
 
     return "\n".join(lines)
