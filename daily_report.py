@@ -13,23 +13,10 @@ load_dotenv()
 
 import os
 import time
-import requests
 import pandas as pd
 import yfinance as yf
 from market_indicators import collect_all
 from telegram_notifier import send_message
-
-# GitHub Actions 환경에서 Yahoo Finance 차단 우회용 세션
-_yf_session = requests.Session()
-_yf_session.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-})
 
 # ── 포트폴리오 설정 ──────────────────────────────────────────────
 PORTFOLIO = os.getenv("WATCH_STOCKS", "SPYM,QQQM,TQQQ,UPRO,CCJ,VRT,CEG,COPX,ETN").split(",")
@@ -39,7 +26,7 @@ MA_PERIODS = [20, 50, 200]
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     for attempt in range(3):
         try:
-            t = yf.Ticker(ticker, session=_yf_session)
+            t = yf.Ticker(ticker)
             df = t.history(period=period)
             if df is not None and not df.empty:
                 return df
