@@ -22,12 +22,14 @@ from telegram_notifier import send_message
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
+_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY or None)
 
 ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 
 # ── 포트폴리오 설정 ──────────────────────────────────────────────
-PORTFOLIO = os.getenv("WATCH_STOCKS", "SPYM,QQQM,TQQQ,UPRO,CCJ,VRT,CEG,COPX,ETN").split(",")
+_watch = os.getenv("WATCH_STOCKS", "")
+PORTFOLIO = [t.strip() for t in _watch.split(",") if t.strip()] or \
+            ["SPYM","QQQM","TQQQ","UPRO","CCJ","VRT","CEG","COPX","ETN"]
 MA_PERIODS = [20, 50, 200]
 
 
