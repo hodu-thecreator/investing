@@ -15,12 +15,20 @@ import threading
 import schedule
 from datetime import datetime
 from dotenv import load_dotenv
+import anthropic
 
 load_dotenv()
 
 from telegram_notifier import send_message, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, _api
 from daily_report import build_report, judge_ticker, market_score
 from market_indicators import collect_all
+from config import Config
+
+_config = Config()
+_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
+
+# chat_id → 대화 히스토리 (최대 20턴 유지)
+_chat_histories: dict[str, list] = {}
 
 # ── 업데이트 폴링 ──────────────────────────────────────────────
 
@@ -114,13 +122,54 @@ def handle_check(chat_id: int, ticker: str):
         _reply(chat_id, f"❌ 오류 발생:\n<code>{e}</code>")
 
 
+def handle_chat(chat_id: int, text: str):
+    """일반 텍스트 메시지를 Claude에게 전달하고 응답 반환"""
+    key = str(chat_id)
+    history = _chat_histories.setdefault(key, [])
+
+    history.append({"role": "user", "content": text})
+
+    try:
+        resp = _claude.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=(
+                "당신은 주식·암호화폐 투자 전문 AI 어시스턴트입니다. "
+                "한국어로 친절하고 간결하게 답변하세요. "
+                "투자 관련 질문에는 데이터와 근거를 바탕으로 답변하고, "
+                "일반 질문도 성실히 답변하세요."
+            ),
+            messages=history,
+        )
+        answer = resp.content[0].text
+        history.append({"role": "assistant", "content": answer})
+
+        # 히스토리 최대 20턴(40개 메시지) 유지
+        if len(history) > 40:
+            _chat_histories[key] = history[-40:]
+
+        _reply(chat_id, answer)
+    except Exception as e:
+        import traceback
+        print(f"[handle_chat] 오류:\n{traceback.format_exc()}")
+        _reply(chat_id, f"❌ Claude 응답 오류: {e}")
+
+
+def handle_reset(chat_id: int):
+    """대화 히스토리 초기화"""
+    _chat_histories.pop(str(chat_id), None)
+    _reply(chat_id, "🗑 대화 기록이 초기화되었습니다.")
+
+
 def handle_help(chat_id: int):
     text = (
         "<b>📖 사용 가능한 명령어</b>\n\n"
         "/report — 전체 종합 판단 브리핑\n"
         "/check TICKER — 특정 종목 즉시 분석\n"
         "   예) /check TQQQ\n"
+        "/reset — Claude와의 대화 기록 초기화\n"
         "/help — 이 메시지\n\n"
+        "<i>명령어 외 일반 메시지는 Claude AI가 직접 답변합니다.</i>\n"
         "<i>매일 08:00 KST 자동 브리핑이 전송됩니다.</i>"
     )
     _reply(chat_id, text)
@@ -137,7 +186,9 @@ def dispatch(message: dict):
         return
 
     if not text.startswith("/"):
-        return  # 명령어가 아닌 메시지 무시
+        # 일반 메시지 → Claude 자유 대화
+        threading.Thread(target=handle_chat, args=(chat_id, text), daemon=True).start()
+        return
 
     parts = text.split(maxsplit=1)
     cmd = parts[0].lower().split("@")[0]  # /cmd@botname 형식 대응
@@ -149,6 +200,8 @@ def dispatch(message: dict):
         threading.Thread(target=handle_report, args=(chat_id,), daemon=True).start()
     elif cmd == "/check":
         threading.Thread(target=handle_check, args=(chat_id, arg), daemon=True).start()
+    elif cmd == "/reset":
+        handle_reset(chat_id)
     elif cmd == "/help" or cmd == "/start":
         handle_help(chat_id)
     else:
