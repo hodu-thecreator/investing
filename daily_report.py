@@ -22,24 +22,28 @@ from telegram_notifier import send_message
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
+_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY or None)
 
 ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 
 # ── 포트폴리오 설정 ──────────────────────────────────────────────
-PORTFOLIO = os.getenv("WATCH_STOCKS", "SPYM,QQQM,TQQQ,UPRO,CCJ,VRT,CEG,COPX,ETN").split(",")
+_watch = os.getenv("WATCH_STOCKS", "")
+PORTFOLIO = [t.strip() for t in _watch.split(",") if t.strip()] or \
+            ["SPYM","QQQM","TQQQ","UPRO","CCJ","VRT","CEG","COPX","ETN"]
 MA_PERIODS = [20, 50, 200]
 
 
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     for attempt in range(3):
         try:
-            t = yf.Ticker(ticker)
-            df = t.history(period=period)
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
             if df is not None and not df.empty:
+                # yf.download returns MultiIndex columns when single ticker — flatten
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
                 return df
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[fetch_stock_data] {ticker} attempt {attempt+1} 실패: {e}")
         if attempt < 2:
             time.sleep(2 ** attempt)
     return pd.DataFrame()
@@ -131,9 +135,11 @@ def generate_news_commentary(news_items: list[dict], mkt_score: int, mkt_reasons
 def _fetch_ticker_quick(ticker: str) -> dict:
     """3개월 종가 데이터로 MA20·고점 대비 낙폭 계산"""
     try:
-        df = yf.Ticker(ticker).history(period="3mo")
-        if df.empty:
+        df = yf.download(ticker, period="3mo", progress=False, auto_adjust=True)
+        if df is None or df.empty:
             return {}
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
         close = df["Close"].dropna()
         if len(close) < 3:
             return {}
@@ -145,7 +151,8 @@ def _fetch_ticker_quick(ticker: str) -> dict:
             "above_ma20": (current > ma20) if ma20 else None,
             "drawdown_3mo": round((current - high) / high * 100, 1),
         }
-    except Exception:
+    except Exception as e:
+        print(f"[_fetch_ticker_quick] {ticker} 실패: {e}")
         return {}
 
 
