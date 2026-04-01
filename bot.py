@@ -22,6 +22,7 @@ load_dotenv()
 from telegram_notifier import send_message, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, _api
 from daily_report import build_report, judge_ticker, market_score
 from market_indicators import collect_all
+from blog_ideas import generate_blog_ideas
 from config import Config
 
 _config = Config()
@@ -297,6 +298,13 @@ def scheduled_report():
     print(f"[{datetime.now():%H:%M:%S}] 정기 브리핑 전송 중...")
     report = build_report()
     send_message(report)
+
+    print(f"[{datetime.now():%H:%M:%S}] 블로그 아이디어 생성 중...")
+    try:
+        ideas = generate_blog_ideas()
+        send_message(ideas)
+    except Exception as e:
+        print(f"[scheduled_report] 블로그 아이디어 오류: {e}")
 
 
 def run_scheduler():

@@ -13,10 +13,15 @@ load_dotenv()
 
 import os
 import time
+import anthropic
 import pandas as pd
 import yfinance as yf
 from market_indicators import collect_all
 from telegram_notifier import send_message
+from config import Config
+
+_config = Config()
+_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
 
 # ── 포트폴리오 설정 ──────────────────────────────────────────────
 PORTFOLIO = os.getenv("WATCH_STOCKS", "SPYM,QQQM,TQQQ,UPRO,CCJ,VRT,CEG,COPX,ETN").split(",")
@@ -52,6 +57,70 @@ def calc_drawdown_from_high(df: pd.DataFrame) -> dict:
     high = df["Close"].max()
     drawdown_pct = (current - high) / high * 100 if high else 0
     return {"current": current, "high": high, "drawdown_pct": drawdown_pct}
+
+
+# ── 시장 뉴스 수집 + Claude 코멘터리 ────────────────────────────
+
+def fetch_market_news() -> list[dict]:
+    """yfinance로 주요 지수 관련 최신 뉴스 수집"""
+    news_items = []
+    seen = set()
+    for sym in ["SPY", "QQQ"]:
+        try:
+            for item in (yf.Ticker(sym).news or [])[:6]:
+                title = item.get("title", "")
+                if title and title not in seen:
+                    seen.add(title)
+                    news_items.append({
+                        "title": title,
+                        "summary": item.get("summary", "")[:120],
+                    })
+        except Exception:
+            pass
+    return news_items[:8]
+
+
+def generate_news_commentary(news_items: list[dict], mkt_score: int, mkt_reasons: list[str]) -> str:
+    """Claude로 뉴스 요약 + 투자 대응 포인트 생성"""
+    if not news_items:
+        return ""
+
+    news_text = "\n".join(
+        f"- {it['title']}" + (f": {it['summary']}" if it["summary"] else "")
+        for it in news_items
+    )
+    mkt_ctx = f"시장 점수 {mkt_score:+d}" + (
+        f" ({', '.join(mkt_reasons)})" if mkt_reasons else ""
+    )
+
+    prompt = f"""오늘의 주요 시장 뉴스:
+{news_text}
+
+현재 시장 상황: {mkt_ctx}
+
+다음 두 파트를 텔레그램 HTML 형식으로 간결하게 작성해주세요:
+
+<b>📰 오늘의 주요 이슈</b>
+• 이슈 1
+• 이슈 2
+• 이슈 3
+
+<b>🛡 투자 대응 포인트</b>
+• 대응 1
+• 대응 2
+
+총 10줄 이내. 한국어."""
+
+    try:
+        resp = _claude.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text
+    except Exception as e:
+        print(f"[news_commentary] Claude 오류: {e}")
+        return ""
 
 
 # ── 시장 환경 점수 (-10 ~ +10, 양수 = 매수 우호적) ──────────────
@@ -192,6 +261,14 @@ def build_report() -> str:
     lines.append(f"\n<b>시장 환경: {mkt_label}</b>")
     if mkt_reasons:
         lines.append("  " + " · ".join(mkt_reasons))
+
+    # 주요 뉴스 + 투자 대응
+    news_items = fetch_market_news()
+    commentary = generate_news_commentary(news_items, mkt_score, mkt_reasons)
+    if commentary:
+        lines.append("")
+        lines.append(commentary)
+        lines.append("━" * 15)
 
     # 종목별 판단
     lines.append(f"\n<b>종목별 판단</b>")
