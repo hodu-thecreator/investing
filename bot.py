@@ -30,6 +30,81 @@ _claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
 # chat_id → 대화 히스토리 (최대 20턴 유지)
 _chat_histories: dict[str, list] = {}
 
+# ── 모델 자동 선택 ─────────────────────────────────────────────
+
+_MODEL_HAIKU  = "claude-haiku-4-5-20251001"   # 단순 질문
+_MODEL_SONNET = "claude-sonnet-4-6"            # 일반 분석
+_MODEL_OPUS   = "claude-opus-4-6"              # 심층 분석
+
+# 복잡도를 높이는 키워드 (각 +2, 최대 +6까지 누적)
+_COMPLEX_KEYWORDS = [
+    "포트폴리오", "최적화", "백테스트", "리밸런싱", "자산배분",
+    "헷지", "파생상품", "옵션", "선물", "공매도",
+    "거시경제", "금리", "인플레이션", "연준", "fed",
+    "상관관계", "변동성", "샤프지수",
+    "심층", "자세히", "상세히", "이유를 설명",
+    "전략을 세워", "어떻게 해야", "어떻게 생각",
+]
+
+# 투자 관련 키워드 (단순하지 않음을 보장, +1)
+_INVEST_KEYWORDS = [
+    "나스닥", "s&p", "코스피", "코스닥", "주식", "etf", "코인",
+    "암호화폐", "매수", "매도", "주가", "실적", "섹터", "종목",
+    "차트", "기술적", "펀더멘털", "배당",
+]
+
+# 단순 응답 키워드 (길이가 짧을 때만 적용, -3)
+_SIMPLE_KEYWORDS = [
+    "안녕", "고마워", "감사", "ㅋㅋ", "ㅎㅎ", "응", "맞아", "알겠어",
+]
+
+
+def _select_model(text: str) -> tuple[str, int]:
+    """질문 복잡도에 따라 (model_id, max_tokens) 반환"""
+    import re
+    length = len(text)
+    lower = text.lower()
+    question_marks = text.count("?") + text.count("？")
+    extra_sentences = text.count(".") + text.count("。") + text.count("\n")
+
+    score = 0
+    score += min(length // 40, 4)                          # 길이: 최대 +4
+    score += min(question_marks, 3)                        # 물음표: 최대 +3
+    score += min(extra_sentences, 2)                       # 문장 수: 최대 +2
+
+    # 주식 티커 감지 (2~5자 대문자, 예: NVDA, TQQQ)
+    if re.search(r'\b[A-Z]{2,5}\b', text):
+        score += 2
+
+    # 투자 관련 키워드 (+1, 단순 아님 보장)
+    for kw in _INVEST_KEYWORDS:
+        if kw in lower:
+            score += 1
+            break
+
+    # 복잡 키워드 (+2씩, 최대 +6)
+    complex_bonus = 0
+    for kw in _COMPLEX_KEYWORDS:
+        if kw in lower:
+            complex_bonus += 2
+            if complex_bonus >= 6:
+                break
+    score += complex_bonus
+
+    # 단순 응답 (짧은 메시지에서만 페널티)
+    if length < 20:
+        for kw in _SIMPLE_KEYWORDS:
+            if kw in lower:
+                score -= 3
+                break
+
+    if score <= 1:
+        return _MODEL_HAIKU, 512
+    elif score <= 4:
+        return _MODEL_SONNET, 1024
+    else:
+        return _MODEL_OPUS, 2048
+
 # ── 업데이트 폴링 ──────────────────────────────────────────────
 
 _last_update_id = 0
@@ -127,12 +202,20 @@ def handle_chat(chat_id: int, text: str):
     key = str(chat_id)
     history = _chat_histories.setdefault(key, [])
 
+    model, max_tokens = _select_model(text)
+    model_label = {
+        _MODEL_HAIKU:  "Haiku",
+        _MODEL_SONNET: "Sonnet",
+        _MODEL_OPUS:   "Opus",
+    }[model]
+    print(f"[chat] chat_id={chat_id}  model={model_label}  max_tokens={max_tokens}  len={len(text)}")
+
     history.append({"role": "user", "content": text})
 
     try:
         resp = _claude.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
+            model=model,
+            max_tokens=max_tokens,
             system=(
                 "당신은 주식·암호화폐 투자 전문 AI 어시스턴트입니다. "
                 "한국어로 친절하고 간결하게 답변하세요. "
