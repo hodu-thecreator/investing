@@ -51,17 +51,19 @@ def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
 
 def calc_moving_averages(df: pd.DataFrame) -> dict:
     result = {}
+    close = df["Close"].squeeze()
     for p in MA_PERIODS:
-        if len(df) >= p:
-            result[p] = df["Close"].rolling(p).mean().iloc[-1]
+        if len(close) >= p:
+            result[p] = float(close.rolling(p).mean().iloc[-1])
     return result
 
 
 def calc_drawdown_from_high(df: pd.DataFrame) -> dict:
     if df.empty:
         return {"current": 0, "high": 0, "drawdown_pct": 0}
-    current = df["Close"].iloc[-1]
-    high = df["Close"].max()
+    close = df["Close"].squeeze()
+    current = float(close.iloc[-1])
+    high = float(close.max())
     drawdown_pct = (current - high) / high * 100 if high else 0
     return {"current": current, "high": high, "drawdown_pct": drawdown_pct}
 
