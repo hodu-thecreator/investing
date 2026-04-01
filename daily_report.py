@@ -22,7 +22,7 @@ from telegram_notifier import send_message
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY or None)
+_claude = anthropic.Anthropic()
 
 ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 
