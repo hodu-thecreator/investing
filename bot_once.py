@@ -21,7 +21,7 @@ from blog_ideas import generate_blog_ideas
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY or None)
+_claude = anthropic.Anthropic()
 
 # ── 상태 파일 (update offset + 대화 이력) ─────────────────────
 STATE_FILE = Path(__file__).parent / ".bot_state.json"

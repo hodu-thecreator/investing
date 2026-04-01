@@ -16,7 +16,7 @@ from datetime import datetime
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY or None)
+_claude = anthropic.Anthropic()
 
 DESIGNBOOM_RSS = "https://www.designboom.com/feed/"
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blog_history.json")
