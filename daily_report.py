@@ -165,47 +165,105 @@ def fetch_accumulation_data(tickers: list) -> dict:
     return result
 
 
+# 종목 설명 사전 — Claude가 포트폴리오 중복·맥락을 파악하는 데 사용
+_TICKER_DESC: dict[str, str] = {
+    "QQQI": "나스닥100 커버드콜 고배당", "SPYI": "S&P500 커버드콜 고배당",
+    "SPYM": "S&P500 적립형", "QQQM": "나스닥100 적립형",
+    "SCHD": "배당 ETF", "DIVO": "배당 ETF(커버드콜)",
+    "DGRW": "배당성장 ETF", "QDVO": "커버드콜 배당 ETF",
+    "BITX": "비트코인 2x 레버리지", "ETHU": "이더리움 2x 레버리지",
+    "ETN": "이튼(전력인프라·전기화)", "NVDA": "엔비디아(AI GPU)",
+    "VRT": "버티브홀딩스(AI 데이터센터 냉각)", "CCJ": "카메코(우라늄 광산)",
+    "CEG": "컨스텔레이션에너지(원전)", "AVGO": "브로드컴(AI 반도체·네트워크)",
+    "XOM": "엑슨모빌(에너지·석유)", "COPX": "구리광산 ETF(산업금속)",
+    "SOXQ": "반도체 ETF", "SOXX": "반도체 ETF(iShares·대형주)",
+    "SOXL": "반도체 3x 레버리지", "QLD": "나스닥100 2x 레버리지",
+    "SSO": "S&P500 2x 레버리지", "TQQQ": "나스닥100 3x 레버리지",
+    "UPRO": "S&P500 3x 레버리지", "SLV": "은 ETF(실물)",
+    "GLDM": "금 ETF(실물·저비용)", "ARKK": "혁신성장 ETF(캐시우드)",
+    "SGOV": "초단기 국채 ETF(현금성 대피처)", "CRCL": "써클인터넷그룹(스테이블코인)",
+}
+
+# 노출 영역 그룹 — 편입 추천 시 중복 방지에 사용
+_COVERAGE_GROUPS = {
+    "금(실물)": ["GLDM"],
+    "은(실물)": ["SLV"],
+    "반도체": ["SOXQ", "SOXX", "SOXL", "NVDA", "AVGO"],
+    "나스닥레버리지": ["QLD", "TQQQ", "QQQM"],
+    "S&P500레버리지": ["SSO", "UPRO", "SPYM"],
+    "비트코인": ["BITX"],
+    "이더리움": ["ETHU"],
+    "원전·우라늄": ["CCJ", "CEG"],
+    "AI인프라": ["VRT", "ETN", "NVDA", "AVGO"],
+    "구리": ["COPX"],
+    "석유": ["XOM"],
+    "배당": ["SCHD", "DIVO", "DGRW", "QDVO", "QQQI", "SPYI"],
+}
+
+
 def generate_accumulation_report(mkt_score: int, news_items: list[dict]) -> str:
     """적립 포트폴리오 유지/중단 판단 + 편입/퇴출 추천 (Claude)"""
     portfolio_data = fetch_accumulation_data(ACCUMULATION_PORTFOLIO)
     if not portfolio_data:
         return ""
 
-    # 종목 요약 텍스트 (컴팩트하게)
+    # 종목 요약 텍스트 (설명 포함)
     ticker_lines = []
     for t in ACCUMULATION_PORTFOLIO:
+        desc = _TICKER_DESC.get(t, "")
         d = portfolio_data.get(t)
         if not d:
-            ticker_lines.append(f"{t}: 데이터 없음")
+            ticker_lines.append(f"{t}({desc}): 데이터 없음")
             continue
         ma_str = "MA20↑" if d["above_ma20"] else ("MA20↓" if d["above_ma20"] is False else "MA-")
-        ticker_lines.append(f"{t}: ${d['price']} {ma_str} {d['drawdown_3mo']:+.1f}%")
+        ticker_lines.append(f"{t}({desc}): ${d['price']} {ma_str} {d['drawdown_3mo']:+.1f}%")
+
+    # 이미 커버된 영역 정리 (중복 추천 방지용)
+    covered = []
+    held = set(ACCUMULATION_PORTFOLIO)
+    for area, tickers in _COVERAGE_GROUPS.items():
+        if any(t in held for t in tickers):
+            covered.append(area)
+    covered_str = ", ".join(covered)
 
     news_titles = " / ".join(it["title"] for it in news_items[:4]) if news_items else ""
 
-    prompt = f"""소액 DCA(매일 $1~3) 투자자 적립 포트폴리오 현황:
+    prompt = f"""소액 DCA(매일 $1~3) 투자자 포트폴리오 점검 요청.
+
+[현재 보유 종목 현황]
 {chr(10).join(ticker_lines)}
 
-시장 점수: {mkt_score:+d}  /  최근 뉴스: {news_titles}
+[시장 점수] {mkt_score:+d}
+[최근 뉴스] {news_titles}
+[이미 커버된 노출 영역] {covered_str}
 
+━━━ 작성 지침 ━━━
 아래 두 파트를 텔레그램 HTML 형식으로 작성해주세요.
 
 <b>📦 적립 포트폴리오 점검</b>
-각 종목을 아래 기준으로 한 줄씩:
-  ✅ 계속 모으기 | ⏸ 잠시 멈추기 | ⬇️ 비중 축소
-형식: 티커 [이모지] — 이유 (구체적 수치 포함)
-레버리지(2x·3x)/크립토 ETF는 하락 추세면 손실 배율 감안해서 보수적으로 판단.
+각 종목 한 줄씩, 판단 기준:
+  ✅ 계속 모으기 — 추세·기술 지표 양호
+  ⏸ 잠시 멈추기 — 하락 추세, 레버리지 손실 배율 위험
+  ⬇️ 비중 축소 고려 — thesis 훼손 or 과도한 비중
+이유에 구체적 수치(MA20 위/아래, 낙폭) 반드시 포함.
+레버리지(2x·3x)·크립토 ETF는 더 보수적 기준 적용.
 
 <b>🌐 편입/퇴출 추천</b>
-🔵 편입 고려 1~3개: 현재 세계 동향 기반, 티커·이유
-🔴 퇴출/중단 고려 1~3개: 보유 중이지만 thesis 훼손된 것, 티커·이유
+🔵 편입 고려 (최대 3개):
+  - 현재 세계 동향상 추가 의미가 있는 종목
+  - ⚠️ 이미 커버된 영역({covered_str})과 겹치는 종목은 추천 금지
+    예외: 동일 자산군이라도 접근 방식이 명확히 다를 때만 허용하고 차이를 명시
+  - 티커·설명·편입 근거 한 줄
+🔴 퇴출/중단 고려 (최대 3개):
+  - 현재 보유 중이지만 thesis 훼손되었거나 중복 과도한 종목
+  - 티커·이유 한 줄
 
-한국어. 각 항목 이유는 한 줄 이내."""
+한국어. 간결하게."""
 
     try:
         resp = _claude.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=1400,
+            max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )
         return resp.content[0].text

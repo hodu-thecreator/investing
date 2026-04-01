@@ -11,5 +11,6 @@ class Config:
         "ACCUMULATION_PORTFOLIO",
         "QQQI,SPYI,SPYM,QQQM,SCHD,DIVO,DGRW,QDVO,"
         "BITX,ETHU,ETN,NVDA,VRT,CCJ,CEG,AVGO,XOM,"
-        "COPX,SOXQ,QLD,SSO,TQQQ,UPRO,SLV,GLDM",
+        "COPX,SOXQ,SOXX,SOXL,QLD,SSO,TQQQ,UPRO,"
+        "SLV,GLDM,ARKK,SGOV,CRCL",
     ).replace(" ", "").split(",")
