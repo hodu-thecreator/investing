@@ -15,12 +15,96 @@ import threading
 import schedule
 from datetime import datetime
 from dotenv import load_dotenv
+import anthropic
 
 load_dotenv()
 
 from telegram_notifier import send_message, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, _api
 from daily_report import build_report, judge_ticker, market_score
 from market_indicators import collect_all
+from blog_ideas import generate_blog_ideas
+from config import Config
+
+_config = Config()
+_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
+
+# chat_id → 대화 히스토리 (최대 20턴 유지)
+_chat_histories: dict[str, list] = {}
+
+# ── 모델 자동 선택 ─────────────────────────────────────────────
+
+_MODEL_HAIKU  = "claude-haiku-4-5-20251001"   # 단순 질문
+_MODEL_SONNET = "claude-sonnet-4-6"            # 일반 분석
+_MODEL_OPUS   = "claude-opus-4-6"              # 심층 분석
+
+# 복잡도를 높이는 키워드 (각 +2, 최대 +6까지 누적)
+_COMPLEX_KEYWORDS = [
+    "포트폴리오", "최적화", "백테스트", "리밸런싱", "자산배분",
+    "헷지", "파생상품", "옵션", "선물", "공매도",
+    "거시경제", "금리", "인플레이션", "연준", "fed",
+    "상관관계", "변동성", "샤프지수",
+    "심층", "자세히", "상세히", "이유를 설명",
+    "전략을 세워", "어떻게 해야", "어떻게 생각",
+]
+
+# 투자 관련 키워드 (단순하지 않음을 보장, +1)
+_INVEST_KEYWORDS = [
+    "나스닥", "s&p", "코스피", "코스닥", "주식", "etf", "코인",
+    "암호화폐", "매수", "매도", "주가", "실적", "섹터", "종목",
+    "차트", "기술적", "펀더멘털", "배당",
+]
+
+# 단순 응답 키워드 (길이가 짧을 때만 적용, -3)
+_SIMPLE_KEYWORDS = [
+    "안녕", "고마워", "감사", "ㅋㅋ", "ㅎㅎ", "응", "맞아", "알겠어",
+]
+
+
+def _select_model(text: str) -> tuple[str, int]:
+    """질문 복잡도에 따라 (model_id, max_tokens) 반환"""
+    import re
+    length = len(text)
+    lower = text.lower()
+    question_marks = text.count("?") + text.count("？")
+    extra_sentences = text.count(".") + text.count("。") + text.count("\n")
+
+    score = 0
+    score += min(length // 40, 4)                          # 길이: 최대 +4
+    score += min(question_marks, 3)                        # 물음표: 최대 +3
+    score += min(extra_sentences, 2)                       # 문장 수: 최대 +2
+
+    # 주식 티커 감지 (2~5자 대문자, 예: NVDA, TQQQ)
+    if re.search(r'\b[A-Z]{2,5}\b', text):
+        score += 2
+
+    # 투자 관련 키워드 (+1, 단순 아님 보장)
+    for kw in _INVEST_KEYWORDS:
+        if kw in lower:
+            score += 1
+            break
+
+    # 복잡 키워드 (+2씩, 최대 +6)
+    complex_bonus = 0
+    for kw in _COMPLEX_KEYWORDS:
+        if kw in lower:
+            complex_bonus += 2
+            if complex_bonus >= 6:
+                break
+    score += complex_bonus
+
+    # 단순 응답 (짧은 메시지에서만 페널티)
+    if length < 20:
+        for kw in _SIMPLE_KEYWORDS:
+            if kw in lower:
+                score -= 3
+                break
+
+    if score <= 1:
+        return _MODEL_HAIKU, 512
+    elif score <= 4:
+        return _MODEL_SONNET, 1024
+    else:
+        return _MODEL_OPUS, 2048
 
 # ── 업데이트 폴링 ──────────────────────────────────────────────
 
@@ -114,16 +198,105 @@ def handle_check(chat_id: int, ticker: str):
         _reply(chat_id, f"❌ 오류 발생:\n<code>{e}</code>")
 
 
+def handle_chat(chat_id: int, text: str):
+    """일반 텍스트 메시지를 Claude에게 전달하고 응답 반환"""
+    key = str(chat_id)
+    history = _chat_histories.setdefault(key, [])
+
+    model, max_tokens = _select_model(text)
+    model_label = {
+        _MODEL_HAIKU:  "Haiku",
+        _MODEL_SONNET: "Sonnet",
+        _MODEL_OPUS:   "Opus",
+    }[model]
+    print(f"[chat] chat_id={chat_id}  model={model_label}  max_tokens={max_tokens}  len={len(text)}")
+
+    history.append({"role": "user", "content": text})
+
+    try:
+        resp = _claude.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=(
+                "당신은 주식·암호화폐 투자 전문 AI 어시스턴트입니다. "
+                "한국어로 친절하고 간결하게 답변하세요. "
+                "투자 관련 질문에는 데이터와 근거를 바탕으로 답변하고, "
+                "일반 질문도 성실히 답변하세요."
+            ),
+            messages=history,
+        )
+        answer = resp.content[0].text
+        history.append({"role": "assistant", "content": answer})
+
+        # 히스토리 최대 20턴(40개 메시지) 유지
+        if len(history) > 40:
+            _chat_histories[key] = history[-40:]
+
+        _reply(chat_id, answer)
+    except Exception as e:
+        import traceback
+        print(f"[handle_chat] 오류:\n{traceback.format_exc()}")
+        _reply(chat_id, f"❌ Claude 응답 오류: {e}")
+
+
+def handle_reset(chat_id: int):
+    """대화 히스토리 초기화"""
+    _chat_histories.pop(str(chat_id), None)
+    _reply(chat_id, "🗑 대화 기록이 초기화되었습니다.")
+
+
 def handle_help(chat_id: int):
     text = (
         "<b>📖 사용 가능한 명령어</b>\n\n"
-        "/report — 전체 종합 판단 브리핑\n"
-        "/check TICKER — 특정 종목 즉시 분석\n"
-        "   예) /check TQQQ\n"
+        "/briefing — 투자 브리핑 + 취향서랍 소재 한 번에\n"
+        "/report — 투자 판단 브리핑만\n"
+        "/ideas — 취향서랍 블로그 소재만\n"
+        "/check TICKER — 특정 종목 즉시 분석 (예: /check NVDA)\n"
+        "/reset — Claude 대화 기록 초기화\n"
         "/help — 이 메시지\n\n"
-        "<i>매일 08:00 KST 자동 브리핑이 전송됩니다.</i>"
+        "<i>💬 자연어도 됩니다:</i>\n"
+        "  '오늘 주식 브리핑 해줘' → 투자 리포트\n"
+        "  '블로그 소재 줘' → 취향서랍 아이디어\n"
+        "  '주식이랑 콘텐츠 브리핑 해줘' → 둘 다\n"
+        "  그 외 질문 → Claude가 직접 답변\n\n"
+        "<i>매일 08:00 KST 자동 브리핑 전송됩니다.</i>"
     )
     _reply(chat_id, text)
+
+
+def handle_blog_ideas(chat_id: int):
+    try:
+        _reply(chat_id, "⏳ 취향서랍 소재 생성 중...")
+        ideas = generate_blog_ideas()
+        _reply(chat_id, ideas)
+    except Exception as e:
+        import traceback
+        print(f"[handle_blog_ideas] 오류:\n{traceback.format_exc()}")
+        _reply(chat_id, f"❌ 오류 발생:\n<code>{e}</code>")
+
+
+def handle_full_briefing(chat_id: int):
+    """투자 브리핑 + 블로그 아이디어 한 번에"""
+    handle_report(chat_id)
+    handle_blog_ideas(chat_id)
+
+
+_INTENT_REPORT = {"브리핑", "리포트", "주식", "투자", "포트폴리오", "report"}
+_INTENT_BLOG   = {"콘텐츠", "블로그", "취향서랍", "아이디어", "소재"}
+
+
+def _detect_intent(text: str) -> str | None:
+    """자연어 메시지에서 명령 의도 감지"""
+    lower = text.lower()
+    want_report = any(kw in lower for kw in _INTENT_REPORT)
+    want_blog   = any(kw in lower for kw in _INTENT_BLOG)
+    if want_report and want_blog:
+        return "both"
+    if want_report:
+        return "report"
+    if want_blog:
+        return "blog"
+    return None
 
 
 def dispatch(message: dict):
@@ -137,7 +310,16 @@ def dispatch(message: dict):
         return
 
     if not text.startswith("/"):
-        return  # 명령어가 아닌 메시지 무시
+        intent = _detect_intent(text)
+        if intent == "both":
+            threading.Thread(target=handle_full_briefing, args=(chat_id,), daemon=True).start()
+        elif intent == "report":
+            threading.Thread(target=handle_report, args=(chat_id,), daemon=True).start()
+        elif intent == "blog":
+            threading.Thread(target=handle_blog_ideas, args=(chat_id,), daemon=True).start()
+        else:
+            threading.Thread(target=handle_chat, args=(chat_id, text), daemon=True).start()
+        return
 
     parts = text.split(maxsplit=1)
     cmd = parts[0].lower().split("@")[0]  # /cmd@botname 형식 대응
@@ -147,8 +329,14 @@ def dispatch(message: dict):
 
     if cmd == "/report":
         threading.Thread(target=handle_report, args=(chat_id,), daemon=True).start()
+    elif cmd == "/ideas":
+        threading.Thread(target=handle_blog_ideas, args=(chat_id,), daemon=True).start()
+    elif cmd == "/briefing":
+        threading.Thread(target=handle_full_briefing, args=(chat_id,), daemon=True).start()
     elif cmd == "/check":
         threading.Thread(target=handle_check, args=(chat_id, arg), daemon=True).start()
+    elif cmd == "/reset":
+        handle_reset(chat_id)
     elif cmd == "/help" or cmd == "/start":
         handle_help(chat_id)
     else:
@@ -161,6 +349,13 @@ def scheduled_report():
     print(f"[{datetime.now():%H:%M:%S}] 정기 브리핑 전송 중...")
     report = build_report()
     send_message(report)
+
+    print(f"[{datetime.now():%H:%M:%S}] 블로그 아이디어 생성 중...")
+    try:
+        ideas = generate_blog_ideas()
+        send_message(ideas)
+    except Exception as e:
+        print(f"[scheduled_report] 블로그 아이디어 오류: {e}")
 
 
 def run_scheduler():
