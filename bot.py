@@ -248,15 +248,55 @@ def handle_reset(chat_id: int):
 def handle_help(chat_id: int):
     text = (
         "<b>📖 사용 가능한 명령어</b>\n\n"
-        "/report — 전체 종합 판단 브리핑\n"
-        "/check TICKER — 특정 종목 즉시 분석\n"
-        "   예) /check TQQQ\n"
-        "/reset — Claude와의 대화 기록 초기화\n"
+        "/briefing — 투자 브리핑 + 취향서랍 소재 한 번에\n"
+        "/report — 투자 판단 브리핑만\n"
+        "/ideas — 취향서랍 블로그 소재만\n"
+        "/check TICKER — 특정 종목 즉시 분석 (예: /check NVDA)\n"
+        "/reset — Claude 대화 기록 초기화\n"
         "/help — 이 메시지\n\n"
-        "<i>명령어 외 일반 메시지는 Claude AI가 직접 답변합니다.</i>\n"
-        "<i>매일 08:00 KST 자동 브리핑이 전송됩니다.</i>"
+        "<i>💬 자연어도 됩니다:</i>\n"
+        "  '오늘 주식 브리핑 해줘' → 투자 리포트\n"
+        "  '블로그 소재 줘' → 취향서랍 아이디어\n"
+        "  '주식이랑 콘텐츠 브리핑 해줘' → 둘 다\n"
+        "  그 외 질문 → Claude가 직접 답변\n\n"
+        "<i>매일 08:00 KST 자동 브리핑 전송됩니다.</i>"
     )
     _reply(chat_id, text)
+
+
+def handle_blog_ideas(chat_id: int):
+    try:
+        _reply(chat_id, "⏳ 취향서랍 소재 생성 중...")
+        ideas = generate_blog_ideas()
+        _reply(chat_id, ideas)
+    except Exception as e:
+        import traceback
+        print(f"[handle_blog_ideas] 오류:\n{traceback.format_exc()}")
+        _reply(chat_id, f"❌ 오류 발생:\n<code>{e}</code>")
+
+
+def handle_full_briefing(chat_id: int):
+    """투자 브리핑 + 블로그 아이디어 한 번에"""
+    handle_report(chat_id)
+    handle_blog_ideas(chat_id)
+
+
+_INTENT_REPORT = {"브리핑", "리포트", "주식", "투자", "포트폴리오", "report"}
+_INTENT_BLOG   = {"콘텐츠", "블로그", "취향서랍", "아이디어", "소재"}
+
+
+def _detect_intent(text: str) -> str | None:
+    """자연어 메시지에서 명령 의도 감지"""
+    lower = text.lower()
+    want_report = any(kw in lower for kw in _INTENT_REPORT)
+    want_blog   = any(kw in lower for kw in _INTENT_BLOG)
+    if want_report and want_blog:
+        return "both"
+    if want_report:
+        return "report"
+    if want_blog:
+        return "blog"
+    return None
 
 
 def dispatch(message: dict):
@@ -270,8 +310,15 @@ def dispatch(message: dict):
         return
 
     if not text.startswith("/"):
-        # 일반 메시지 → Claude 자유 대화
-        threading.Thread(target=handle_chat, args=(chat_id, text), daemon=True).start()
+        intent = _detect_intent(text)
+        if intent == "both":
+            threading.Thread(target=handle_full_briefing, args=(chat_id,), daemon=True).start()
+        elif intent == "report":
+            threading.Thread(target=handle_report, args=(chat_id,), daemon=True).start()
+        elif intent == "blog":
+            threading.Thread(target=handle_blog_ideas, args=(chat_id,), daemon=True).start()
+        else:
+            threading.Thread(target=handle_chat, args=(chat_id, text), daemon=True).start()
         return
 
     parts = text.split(maxsplit=1)
@@ -282,6 +329,10 @@ def dispatch(message: dict):
 
     if cmd == "/report":
         threading.Thread(target=handle_report, args=(chat_id,), daemon=True).start()
+    elif cmd == "/ideas":
+        threading.Thread(target=handle_blog_ideas, args=(chat_id,), daemon=True).start()
+    elif cmd == "/briefing":
+        threading.Thread(target=handle_full_briefing, args=(chat_id,), daemon=True).start()
     elif cmd == "/check":
         threading.Thread(target=handle_check, args=(chat_id, arg), daemon=True).start()
     elif cmd == "/reset":
