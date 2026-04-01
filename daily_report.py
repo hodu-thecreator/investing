@@ -16,12 +16,15 @@ import time
 import anthropic
 import pandas as pd
 import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from market_indicators import collect_all
 from telegram_notifier import send_message
 from config import Config
 
 _config = Config()
 _claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
+
+ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 
 # ── 포트폴리오 설정 ──────────────────────────────────────────────
 PORTFOLIO = os.getenv("WATCH_STOCKS", "SPYM,QQQM,TQQQ,UPRO,CCJ,VRT,CEG,COPX,ETN").split(",")
@@ -120,6 +123,94 @@ def generate_news_commentary(news_items: list[dict], mkt_score: int, mkt_reasons
         return resp.content[0].text
     except Exception as e:
         print(f"[news_commentary] Claude 오류: {e}")
+        return ""
+
+
+# ── 적립 포트폴리오 평가 ────────────────────────────────────────
+
+def _fetch_ticker_quick(ticker: str) -> dict:
+    """3개월 종가 데이터로 MA20·고점 대비 낙폭 계산"""
+    try:
+        df = yf.Ticker(ticker).history(period="3mo")
+        if df.empty:
+            return {}
+        close = df["Close"].dropna()
+        if len(close) < 3:
+            return {}
+        current = float(close.iloc[-1])
+        ma20 = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else None
+        high = float(close.max())
+        return {
+            "price": round(current, 2),
+            "above_ma20": (current > ma20) if ma20 else None,
+            "drawdown_3mo": round((current - high) / high * 100, 1),
+        }
+    except Exception:
+        return {}
+
+
+def fetch_accumulation_data(tickers: list) -> dict:
+    """적립 포트폴리오 전체 데이터 병렬 수집"""
+    result = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(_fetch_ticker_quick, t): t for t in tickers}
+        for fut in as_completed(futures, timeout=45):
+            ticker = futures[fut]
+            try:
+                data = fut.result()
+                if data:
+                    result[ticker] = data
+            except Exception:
+                pass
+    return result
+
+
+def generate_accumulation_report(mkt_score: int, news_items: list[dict]) -> str:
+    """적립 포트폴리오 유지/중단 판단 + 편입/퇴출 추천 (Claude)"""
+    portfolio_data = fetch_accumulation_data(ACCUMULATION_PORTFOLIO)
+    if not portfolio_data:
+        return ""
+
+    # 종목 요약 텍스트 (컴팩트하게)
+    ticker_lines = []
+    for t in ACCUMULATION_PORTFOLIO:
+        d = portfolio_data.get(t)
+        if not d:
+            ticker_lines.append(f"{t}: 데이터 없음")
+            continue
+        ma_str = "MA20↑" if d["above_ma20"] else ("MA20↓" if d["above_ma20"] is False else "MA-")
+        ticker_lines.append(f"{t}: ${d['price']} {ma_str} {d['drawdown_3mo']:+.1f}%")
+
+    news_titles = " / ".join(it["title"] for it in news_items[:4]) if news_items else ""
+
+    prompt = f"""소액 DCA(매일 $1~3) 투자자 적립 포트폴리오 현황:
+{chr(10).join(ticker_lines)}
+
+시장 점수: {mkt_score:+d}  /  최근 뉴스: {news_titles}
+
+아래 두 파트를 텔레그램 HTML 형식으로 작성해주세요.
+
+<b>📦 적립 포트폴리오 점검</b>
+각 종목을 아래 기준으로 한 줄씩:
+  ✅ 계속 모으기 | ⏸ 잠시 멈추기 | ⬇️ 비중 축소
+형식: 티커 [이모지] — 이유 (구체적 수치 포함)
+레버리지(2x·3x)/크립토 ETF는 하락 추세면 손실 배율 감안해서 보수적으로 판단.
+
+<b>🌐 편입/퇴출 추천</b>
+🔵 편입 고려 1~3개: 현재 세계 동향 기반, 티커·이유
+🔴 퇴출/중단 고려 1~3개: 보유 중이지만 thesis 훼손된 것, 티커·이유
+
+한국어. 각 항목 이유는 한 줄 이내."""
+
+    try:
+        resp = _claude.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return resp.content[0].text
+    except Exception as e:
+        print(f"[accumulation_report] Claude 오류: {e}")
         return ""
 
 
@@ -268,6 +359,13 @@ def build_report() -> str:
     if commentary:
         lines.append("")
         lines.append(commentary)
+        lines.append("━" * 15)
+
+    # 적립 포트폴리오 점검 + 편입/퇴출 추천
+    accum_report = generate_accumulation_report(mkt_score, news_items)
+    if accum_report:
+        lines.append("")
+        lines.append(accum_report)
         lines.append("━" * 15)
 
     # 종목별 판단
