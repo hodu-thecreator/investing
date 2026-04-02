@@ -26,16 +26,16 @@ from blog_ideas import generate_blog_ideas
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic(api_key=_config.ANTHROPIC_API_KEY)
+_claude = anthropic.Anthropic()
 
 # chat_id → 대화 히스토리 (최대 20턴 유지)
 _chat_histories: dict[str, list] = {}
 
 # ── 모델 자동 선택 ─────────────────────────────────────────────
 
-_MODEL_HAIKU  = "claude-haiku-4-5-20251001"   # 단순 질문
-_MODEL_SONNET = "claude-sonnet-4-6"            # 일반 분석
-_MODEL_OPUS   = "claude-opus-4-6"              # 심층 분석
+_MODEL_HAIKU  = "claude-3-haiku-20240307"      # 단순 질문
+_MODEL_SONNET = "claude-3-5-sonnet-20241022"   # 일반 분석
+_MODEL_OPUS   = "claude-3-5-sonnet-20241022"   # 심층 분석
 
 # 복잡도를 높이는 키워드 (각 +2, 최대 +6까지 누적)
 _COMPLEX_KEYWORDS = [
