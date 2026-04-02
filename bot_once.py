@@ -7,7 +7,8 @@ GitHub Actions에서 1분마다 실행 → 사실상 양방향 봇처럼 동작
 
 import json
 import os
-import anthropic
+import requests
+import claude_client
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -21,7 +22,6 @@ from blog_ideas import generate_blog_ideas
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic()
 
 # ── 상태 파일 (update offset + 대화 이력) ─────────────────────
 STATE_FILE = Path(__file__).parent / ".bot_state.json"
@@ -187,19 +187,21 @@ def handle_chat(chat_id: int, text: str, state: dict):
     model_label = {_MODEL_HAIKU: "Haiku", _MODEL_SONNET: "Sonnet", _MODEL_OPUS: "Opus"}[model]
     print(f"[chat] model={model_label} max_tokens={max_tokens} len={len(text)}")
     history.append({"role": "user", "content": text})
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     try:
-        resp = _claude.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=(
-                "당신은 주식·암호화폐 투자 전문 AI 어시스턴트입니다. "
-                "한국어로 친절하고 간결하게 답변하세요. "
-                "투자 관련 질문에는 데이터와 근거를 바탕으로 답변하고, "
-                "일반 질문도 성실히 답변하세요."
-            ),
-            messages=history,
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={
+                "model": model,
+                "max_tokens": max_tokens,
+                "system": "당신은 주식·암호화폐 투자 전문 AI 어시스턴트입니다. 한국어로 친절하고 간결하게 답변하세요.",
+                "messages": history,
+            },
+            timeout=90,
         )
-        answer = resp.content[0].text
+        resp.raise_for_status()
+        answer = resp.json()["content"][0]["text"]
         history.append({"role": "assistant", "content": answer})
         if len(history) > MAX_HISTORY:
             histories[key] = history[-MAX_HISTORY:]
