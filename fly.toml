@@ -1,0 +1,16 @@
+[app]
+name = "jarvis-bot"
+primary_region = "nrt"  # Tokyo — 한국과 가장 가까움
+
+[build]
+  [build.args]
+
+[processes]
+  worker = "python bot.py"
+
+[[services]]
+
+[mounts]
+
+[env]
+  # 환경변수는 fly secrets set 으로 설정
