@@ -36,14 +36,11 @@ MA_PERIODS = [20, 50, 200]
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     for attempt in range(3):
         try:
-            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+            df = yf.Ticker(ticker).history(period=period)
             if df is not None and not df.empty:
-                # yf.download returns MultiIndex columns when single ticker — flatten
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
                 return df
         except Exception as e:
-            print(f"[fetch_stock_data] {ticker} attempt {attempt+1} 실패: {e}")
+            print(f"[fetch_stock_data] {ticker} attempt {attempt+1}: {e}")
         if attempt < 2:
             time.sleep(2 ** attempt)
     return pd.DataFrame()
@@ -122,7 +119,7 @@ def generate_news_commentary(news_items: list[dict], mkt_score: int, mkt_reasons
 
     try:
         resp = _claude.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -137,11 +134,9 @@ def generate_news_commentary(news_items: list[dict], mkt_score: int, mkt_reasons
 def _fetch_ticker_quick(ticker: str) -> dict:
     """3개월 종가 데이터로 MA20·고점 대비 낙폭 계산"""
     try:
-        df = yf.download(ticker, period="3mo", progress=False, auto_adjust=True)
+        df = yf.Ticker(ticker).history(period="3mo")
         if df is None or df.empty:
             return {}
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
         close = df["Close"].dropna()
         if len(close) < 3:
             return {}
@@ -271,7 +266,7 @@ def generate_accumulation_report(mkt_score: int, news_items: list[dict]) -> str:
 
     try:
         resp = _claude.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-3-5-sonnet-20241022",
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
         )

@@ -41,9 +41,9 @@ def _save_state(state: dict):
 
 # ── 모델 자동 선택 ────────────────────────────────────────────
 
-_MODEL_HAIKU  = "claude-haiku-4-5-20251001"
-_MODEL_SONNET = "claude-sonnet-4-6"
-_MODEL_OPUS   = "claude-opus-4-6"
+_MODEL_HAIKU  = "claude-3-haiku-20240307"
+_MODEL_SONNET = "claude-3-5-sonnet-20241022"
+_MODEL_OPUS   = "claude-3-5-sonnet-20241022"
 
 _COMPLEX_KEYWORDS = [
     "포트폴리오", "최적화", "백테스트", "리밸런싱", "자산배분",
