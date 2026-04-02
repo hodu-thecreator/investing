@@ -13,8 +13,8 @@ load_dotenv()
 
 import os
 import time
-import anthropic
 import pandas as pd
+import claude_client
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from market_indicators import collect_all
@@ -22,7 +22,6 @@ from telegram_notifier import send_message
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic()
 
 ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 
@@ -117,16 +116,10 @@ def generate_news_commentary(news_items: list[dict], mkt_score: int, mkt_reasons
 
 총 10줄 이내. 한국어."""
 
-    try:
-        resp = _claude.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.content[0].text
-    except Exception as e:
-        print(f"[news_commentary] Claude 오류: {e}")
-        return ""
+    result = claude_client.call(prompt, max_tokens=512)
+    if not result:
+        print("[news_commentary] Claude 응답 없음")
+    return result
 
 
 # ── 적립 포트폴리오 평가 ────────────────────────────────────────
@@ -265,14 +258,12 @@ def generate_accumulation_report(mkt_score: int, news_items: list[dict]) -> str:
 한국어. 간결하게."""
 
     try:
-        resp = _claude.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.content[0].text
+        result = claude_client.call(prompt, max_tokens=1500)
+        if not result:
+            print("[accumulation_report] Claude 응답 없음")
+        return result
     except Exception as e:
-        print(f"[accumulation_report] Claude 오류: {e}")
+        print(f"[accumulation_report] 오류: {e}")
         return ""
 
 

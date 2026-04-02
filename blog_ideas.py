@@ -11,12 +11,11 @@ import json
 import os
 import requests
 import xml.etree.ElementTree as ET
-import anthropic
+import claude_client
 from datetime import datetime
 from config import Config
 
 _config = Config()
-_claude = anthropic.Anthropic()
 
 DESIGNBOOM_RSS = "https://www.designboom.com/feed/"
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blog_history.json")
@@ -184,12 +183,9 @@ def generate_blog_ideas() -> str:
 한국어로 작성."""
 
     try:
-        resp = _claude.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        ideas_text = resp.content[0].text
+        ideas_text = claude_client.call(prompt, max_tokens=2000)
+        if not ideas_text:
+            return "✏️ <b>오늘의 취향서랍 소재</b>\n아이디어 생성 중 오류가 발생했습니다."
 
         # 이력 추출: 🆕 뒤에 나오는 제품명 파싱
         import re
