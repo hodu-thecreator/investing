@@ -121,7 +121,11 @@ def _detect_intent(text: str) -> str | None:
 def handle_report(chat_id: int):
     try:
         send_message("⏳ 분석 중... 잠시만 기다려주세요.", chat_id=str(chat_id))
-        send_message(build_report(), chat_id=str(chat_id))
+        report = build_report()
+        send_message(report, chat_id=str(chat_id))
+        # Claude 구간이 빠진 경우 에러 알림
+        if claude_client.last_error:
+            send_message(f"⚠️ Claude API 오류 (뉴스해설/적립보고서 생략됨)\n<code>{claude_client.last_error}</code>", chat_id=str(chat_id))
     except Exception as e:
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
@@ -129,7 +133,12 @@ def handle_report(chat_id: int):
 def handle_blog_ideas(chat_id: int):
     try:
         send_message("⏳ 취향서랍 소재 생성 중...", chat_id=str(chat_id))
-        send_message(generate_blog_ideas(), chat_id=str(chat_id))
+        result = generate_blog_ideas()
+        if result:
+            send_message(result, chat_id=str(chat_id))
+        else:
+            err = claude_client.last_error or "Claude 응답 없음"
+            send_message(f"❌ 블로그 아이디어 생성 실패\n<code>{err}</code>", chat_id=str(chat_id))
     except Exception as e:
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
@@ -269,6 +278,8 @@ def dispatch(message: dict, state: dict):
         handle_blog_ideas(chat_id)
     elif cmd == "/check":
         handle_check(chat_id, arg)
+    elif cmd == "/testapi":
+        send_message(claude_client.test_api(), chat_id=str(chat_id))
     elif cmd == "/reset":
         handle_reset(chat_id, state)
     elif cmd in ("/help", "/start"):
