@@ -21,6 +21,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from market_indicators import collect_all
 from telegram_notifier import send_message
 from config import Config
+from dca_calculator import build_dca_section
+from events import build_calendar_section
 
 _config = Config()
 
@@ -942,7 +944,31 @@ def build_report() -> str:
         lines.append("\n" + "━" * 28)
         lines.append(lev_section)
 
-    # ── [5] 예상 배당 섹션 ────────────────────────────────────────
+    # ── [5] 오늘의 동적 DCA 권장 금액 ─────────────────────────────
+    base_dds = {}
+    for base_ticker in ("SPYM", "QQQM", "SOXQ"):
+        try:
+            df = fetch_stock_data(base_ticker, period="3mo")
+            if df.empty:
+                continue
+            close = df["Close"].squeeze()
+            current = float(close.iloc[-1])
+            high_60d = float(close.rolling(min(60, len(close))).max().iloc[-1])
+            base_dds[base_ticker] = (current - high_60d) / high_60d * 100
+        except Exception:
+            pass
+    dca_section = build_dca_section(indicators, risk_score, base_dds)
+    if dca_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(dca_section)
+
+    # ── [6] 다가오는 이벤트 캘린더 ────────────────────────────────
+    cal_section = build_calendar_section(_config.HOLDINGS, days_ahead=14)
+    if cal_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(cal_section)
+
+    # ── [7] 예상 배당 섹션 ────────────────────────────────────────
     div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)
     if div_section:
         lines.append("\n" + "━" * 28)

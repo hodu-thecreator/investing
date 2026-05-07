@@ -33,6 +33,14 @@ jobs:
           restore-keys: |
             bot-state-
 
+      - name: Restore transactions log
+        uses: actions/cache@v4
+        with:
+          path: .transactions.json
+          key: transactions-${{ github.run_id }}
+          restore-keys: |
+            transactions-
+
       - name: Handle pending Telegram commands
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -48,3 +56,10 @@ jobs:
         with:
           path: .bot_state.json
           key: bot-state-${{ github.run_id }}
+
+      - name: Save transactions log
+        uses: actions/cache@v4
+        if: always()
+        with:
+          path: .transactions.json
+          key: transactions-${{ github.run_id }}

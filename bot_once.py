@@ -20,6 +20,7 @@ from daily_report import build_report, judge_ticker, market_score
 from market_indicators import collect_all
 from blog_ideas import generate_blog_ideas
 from config import Config
+import transactions
 
 _config = Config()
 
@@ -224,21 +225,107 @@ def handle_reset(chat_id: int, state: dict):
     send_message("🗑 대화 기록이 초기화되었습니다.", chat_id=str(chat_id))
 
 
+def _parse_trade(arg: str):
+    parts = arg.split()
+    if len(parts) < 3:
+        return None
+    return {
+        "ticker": parts[0].upper(),
+        "qty": float(parts[1]),
+        "price": float(parts[2]),
+        "date": parts[3] if len(parts) > 3 else None,
+    }
+
+
+def handle_buy(chat_id: int, arg: str):
+    try:
+        p = _parse_trade(arg)
+        if not p:
+            send_message(
+                "사용법: <code>/buy TICKER QTY PRICE [YYYY-MM-DD]</code>\n"
+                "예: <code>/buy QQQM 1 220.50</code>",
+                chat_id=str(chat_id),
+            )
+            return
+        rec = transactions.add_buy(p["ticker"], p["qty"], p["price"], p["date"])
+        send_message(
+            f"✅ 매수 기록\n<b>{rec['ticker']}</b>  {rec['qty']}주 @ ${rec['price']:.2f}\n"
+            f"  {rec['date']}  ·  총 ${rec['qty']*rec['price']:.2f}",
+            chat_id=str(chat_id),
+        )
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_sell(chat_id: int, arg: str):
+    try:
+        p = _parse_trade(arg)
+        if not p:
+            send_message(
+                "사용법: <code>/sell TICKER QTY PRICE [YYYY-MM-DD]</code>",
+                chat_id=str(chat_id),
+            )
+            return
+        rec = transactions.add_sell(p["ticker"], p["qty"], p["price"], p["date"])
+        send_message(
+            f"✅ 매도 기록\n<b>{rec['ticker']}</b>  {rec['qty']}주 @ ${rec['price']:.2f}\n"
+            f"  {rec['date']}  ·  총 ${rec['qty']*rec['price']:.2f}",
+            chat_id=str(chat_id),
+        )
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_portfolio(chat_id: int):
+    try:
+        send_message(transactions.format_portfolio(), chat_id=str(chat_id))
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_history(chat_id: int, arg: str):
+    try:
+        limit = int(arg) if arg.isdigit() else 10
+        send_message(transactions.format_history(limit), chat_id=str(chat_id))
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_undo(chat_id: int):
+    try:
+        last = transactions.undo_last()
+        if not last:
+            send_message("📭 취소할 거래 기록 없음", chat_id=str(chat_id))
+            return
+        send_message(
+            f"↩️ 취소됨\n{last['type'].upper()} {last['ticker']} "
+            f"{last['qty']}@${last['price']:.2f} ({last['date']})",
+            chat_id=str(chat_id),
+        )
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
 def handle_help(chat_id: int):
     send_message(
         "<b>📖 사용 가능한 명령어</b>\n\n"
+        "<b>📊 브리핑</b>\n"
         "/briefing — 투자 브리핑 + 취향서랍 소재 한 번에\n"
         "/report — 투자 판단 브리핑만\n"
         "/ideas — 취향서랍 블로그 소재만\n"
-        "/check TICKER — 특정 종목 즉시 분석 (예: /check NVDA)\n"
+        "/check TICKER — 특정 종목 즉시 분석\n\n"
+        "<b>💼 거래 기록</b>\n"
+        "/buy TICKER QTY PRICE — 매수 기록 (예: /buy QQQM 1 220.50)\n"
+        "/sell TICKER QTY PRICE — 매도 기록\n"
+        "/portfolio — 보유 종목 평균단가 + 손익\n"
+        "/history [N] — 최근 거래 내역 (기본 10건)\n"
+        "/undo — 마지막 거래 기록 취소\n\n"
+        "<b>⚙️ 기타</b>\n"
+        "/testapi — Claude API 연결 테스트\n"
         "/reset — Claude 대화 기록 초기화\n"
         "/help — 이 메시지\n\n"
-        "<i>💬 자연어도 됩니다:</i>\n"
-        "  '오늘 주식 브리핑 해줘' → 투자 리포트\n"
-        "  '블로그 소재 줘' → 취향서랍 아이디어\n"
-        "  '주식이랑 콘텐츠 브리핑 해줘' → 둘 다\n"
-        "  그 외 질문 → Claude가 직접 답변\n\n"
-        "<i>매일 08:00 KST 자동 브리핑 전송됩니다.</i>",
+        "<i>💬 자연어도 가능 — 그 외 질문은 Claude가 답변</i>\n"
+        "<i>📨 평일 미국 장 오픈 후 30분(약 22:30~23:30 KST) 자동 브리핑</i>",
         chat_id=str(chat_id),
     )
 
@@ -278,6 +365,16 @@ def dispatch(message: dict, state: dict):
         handle_blog_ideas(chat_id)
     elif cmd == "/check":
         handle_check(chat_id, arg)
+    elif cmd == "/buy":
+        handle_buy(chat_id, arg)
+    elif cmd == "/sell":
+        handle_sell(chat_id, arg)
+    elif cmd == "/portfolio":
+        handle_portfolio(chat_id)
+    elif cmd == "/history":
+        handle_history(chat_id, arg)
+    elif cmd == "/undo":
+        handle_undo(chat_id)
     elif cmd == "/testapi":
         send_message(claude_client.test_api(), chat_id=str(chat_id))
     elif cmd == "/reset":
