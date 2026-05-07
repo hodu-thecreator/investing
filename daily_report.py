@@ -24,6 +24,7 @@ from config import Config
 from dca_calculator import build_dca_section
 from events import build_calendar_section
 from news_headlines import build_news_section
+from rebalancing import check_drifts
 
 _config = Config()
 
@@ -982,6 +983,26 @@ def build_report() -> str:
     if news_section:
         lines.append("\n" + "━" * 28)
         lines.append(news_section)
+
+    # ── [7.5] 리밸런싱 알림 (드리프트 ±5%p 초과 시만) ─────────────
+    try:
+        drifts = check_drifts()
+        if drifts:
+            lines.append("\n" + "━" * 28)
+            lines.append("<b>⚖️ 리밸런싱 알림</b>")
+            for d in drifts:
+                arrow = "🔴" if d["drift_pct"] > 0 else "🔵"
+                tip = ""
+                if d["drift_pct"] < 0 and d["preferred"]:
+                    tip = f" → {', '.join(d['preferred'])}"
+                lines.append(
+                    f"  {arrow} <b>{d['category']}</b>  "
+                    f"{d['current_pct']:.1f}% / {d['target_pct']:.0f}% "
+                    f"({d['drift_pct']:+.1f}%p){tip}"
+                )
+            lines.append("  <i>전체 보기: /rebalance</i>")
+    except Exception as e:
+        print(f"[rebalance] {e}")
 
     # ── [8] 예상 배당 섹션 ────────────────────────────────────────
     div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)

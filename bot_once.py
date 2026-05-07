@@ -306,6 +306,14 @@ def handle_undo(chat_id: int):
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
 
+def handle_rebalance(chat_id: int):
+    try:
+        from rebalancing import build_rebalance_section
+        send_message(build_rebalance_section(), chat_id=str(chat_id))
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
 def handle_help(chat_id: int):
     send_message(
         "<b>📖 사용 가능한 명령어</b>\n\n"
@@ -319,7 +327,8 @@ def handle_help(chat_id: int):
         "/sell TICKER QTY PRICE — 매도 기록\n"
         "/portfolio — 보유 종목 평균단가 + 손익\n"
         "/history [N] — 최근 거래 내역 (기본 10건)\n"
-        "/undo — 마지막 거래 기록 취소\n\n"
+        "/undo — 마지막 거래 기록 취소\n"
+        "/rebalance — 카테고리별 비중 vs 목표 점검\n\n"
         "<b>⚙️ 기타</b>\n"
         "/testapi — Claude API 연결 테스트\n"
         "/reset — Claude 대화 기록 초기화\n"
@@ -375,6 +384,8 @@ def dispatch(message: dict, state: dict):
         handle_history(chat_id, arg)
     elif cmd == "/undo":
         handle_undo(chat_id)
+    elif cmd == "/rebalance":
+        handle_rebalance(chat_id)
     elif cmd == "/testapi":
         send_message(claude_client.test_api(), chat_id=str(chat_id))
     elif cmd == "/reset":
