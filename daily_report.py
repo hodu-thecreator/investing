@@ -28,7 +28,8 @@ ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 # ── 포트폴리오 설정 ──────────────────────────────────────────────
 _watch = os.getenv("WATCH_STOCKS", "")
 PORTFOLIO = [t.strip() for t in _watch.split(",") if t.strip()] or \
-            ["SPYM","QQQM","TQQQ","UPRO","CCJ","VRT","CEG","COPX","ETN"]
+            ["QQQI","SPYI","ETN","MU","VRT","AEHR","GEV",
+             "SOXL","UPRO","QLD","TQQQ","SSO","QQQM","SOXQ","SPYM","SCHD"]
 MA_PERIODS = [20, 50, 200]
 
 
@@ -62,6 +63,30 @@ def calc_drawdown_from_high(df: pd.DataFrame) -> dict:
     high = float(close.max())
     drawdown_pct = (current - high) / high * 100 if high else 0
     return {"current": current, "high": high, "drawdown_pct": drawdown_pct}
+
+
+def calc_rsi(df: pd.DataFrame, period: int = 14) -> float | None:
+    close = df["Close"].squeeze()
+    if len(close) < period + 1:
+        return None
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    rs = gain / loss.replace(0, float("nan"))
+    rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+    return round(rsi, 1)
+
+
+def calc_52w_position(df: pd.DataFrame) -> dict | None:
+    close = df["Close"].squeeze()
+    if len(close) < 50:
+        return None
+    last252 = close.iloc[-252:] if len(close) >= 252 else close
+    low52 = float(last252.min())
+    high52 = float(last252.max())
+    current = float(close.iloc[-1])
+    pos = (current - low52) / (high52 - low52) * 100 if high52 != low52 else 50
+    return {"low": low52, "high": high52, "pos_pct": round(pos, 1)}
 
 
 # ── 시장 뉴스 수집 + Claude 코멘터리 ────────────────────────────
@@ -323,10 +348,13 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
     """종목별 매수/홀딩/매도 판단"""
     df = fetch_stock_data(ticker)
     if df.empty:
-        return {"action": "데이터없음", "emoji": "⚪", "reasons": ["데이터 수집 실패"], "drawdown": 0, "price": 0, "score": 0}
+        return {"action": "데이터없음", "emoji": "⚪", "reasons": ["데이터 수집 실패"],
+                "drawdown": 0, "price": 0, "score": 0, "rsi": None, "w52": None}
 
     dd = calc_drawdown_from_high(df)
     mas = calc_moving_averages(df)
+    rsi = calc_rsi(df)
+    w52 = calc_52w_position(df)
     price = dd.get("current", 0)
     drawdown = dd.get("drawdown_pct", 0)
 
@@ -356,12 +384,13 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
     elif above_mas >= 3:
         stock_score -= 1; reasons.append("이평선 전부 상회 (고점 주의)")
 
-    # 3. 시장 환경 가중치 (레버리지 ETF는 민감도 높임)
-    leverage = ticker in ("TQQQ", "UPRO", "SPYM")
+    # 3. RSI 보조 신호 (판단 점수에 반영 안 함 — 표시만)
+    # 4. 시장 환경 가중치 (레버리지 ETF는 민감도 높임)
+    leverage = ticker in ("TQQQ", "UPRO", "SPYM", "SOXL", "QLD", "SSO")
     env_weight = 2 if leverage else 1
     total = stock_score + (mkt_score * env_weight // 3)
 
-    # 4. 최종 판단
+    # 5. 최종 판단
     if total >= 4:
         action, emoji = "📈 매수", "🟢"
     elif total >= 2:
@@ -378,6 +407,8 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
         "drawdown": drawdown,
         "price": price,
         "score": total,
+        "rsi": rsi,
+        "w52": w52,
     }
 
 
@@ -434,7 +465,23 @@ def build_report() -> str:
         drawdown = result["drawdown"]
         reasons = result["reasons"]
 
-        line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%)  → {action}"
+        rsi = result.get("rsi")
+        w52 = result.get("w52")
+
+        rsi_tag = ""
+        if rsi is not None:
+            if rsi >= 70:
+                rsi_tag = f" RSI {rsi}🔴"
+            elif rsi <= 30:
+                rsi_tag = f" RSI {rsi}🟢"
+            else:
+                rsi_tag = f" RSI {rsi}"
+
+        w52_tag = ""
+        if w52:
+            w52_tag = f" 52주{w52['pos_pct']:.0f}%"
+
+        line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{w52_tag}  → {action}"
         if reasons:
             line += f"\n   <i>{' · '.join(reasons)}</i>"
 
