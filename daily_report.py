@@ -216,13 +216,13 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
     diff_usd = cash_value - target_value
 
     if risk_score >= 7:
-        target_label = f"🔴 {target_ratio*100:.0f}%  (위험점수 {risk_score} — 방어 모드)"
+        target_label = f"🔴 {target_ratio*100:.0f}%  (위험 {risk_score}점 — 방어)"
     elif risk_score >= 5:
-        target_label = f"🟠 {target_ratio*100:.0f}%  (위험점수 {risk_score} — 주의)"
+        target_label = f"🟠 {target_ratio*100:.0f}%  (위험 {risk_score}점)"
     elif risk_score >= 3:
-        target_label = f"🟡 {target_ratio*100:.0f}%  (위험점수 {risk_score} — 소폭 보수)"
+        target_label = f"🟡 {target_ratio*100:.0f}%  (위험 {risk_score}점)"
     else:
-        target_label = f"🟢 {target_ratio*100:.0f}%  (기본)"
+        target_label = f"🟢 {target_ratio*100:.0f}%"
 
     lines = ["<b>💵 현금 비중</b>"]
     lines.append(f"  현재  <b>${cash_value:,.0f}</b>  ({ratio*100:.1f}%)")
@@ -319,31 +319,27 @@ def _calc_entry_timing(close: pd.Series) -> dict:
     if rsi <= 30:
         return {
             "phase": "oversold",
-            "label": f"🟢 과매도 — 매수 적기 (RSI {rsi:.0f}, 5일 {ret_5d:+.1f}%)",
-            "advice": "지금 진입 (1.3배)",
+            "advice": f"🟢 적극 진입 (RSI {rsi:.0f} 과매도)",
             "multiplier": 1.3,
         }
     # 2) 반등 시작: 5일 양전환 + 5일선 상회
     if ret_5d > 0.5 and above_ma5:
         return {
             "phase": "rebound",
-            "label": f"🟢 반등 시작 (5일 {ret_5d:+.1f}%, RSI {rsi:.0f})",
-            "advice": "지금 진입 (1.3배)",
+            "advice": f"🟢 반등 신호 — 지금 진입",
             "multiplier": 1.3,
         }
     # 3) 하락 가속: 5일 -3%↓ + 5일선 하회 + RSI 35↑ (아직 과매도 전)
     if ret_5d <= -3 and not above_ma5 and rsi > 35:
         return {
             "phase": "falling",
-            "label": f"🔴 하락 진행 중 (5일 {ret_5d:+.1f}%, RSI {rsi:.0f})",
-            "advice": "더 떨어질 가능성 — 0.3배만 진입, 다음 신호 대기",
+            "advice": f"⏸ 하락 진행 중 — 대기 (RSI {rsi:.0f})",
             "multiplier": 0.3,
         }
     # 4) 안정화 — 그 외
     return {
         "phase": "stabilizing",
-        "label": f"🟡 안정화 중 (5일 {ret_5d:+.1f}%, RSI {rsi:.0f})",
-        "advice": "분할 매수 시작 (정상 수량)",
+        "advice": "🟡 분할 매수 시작",
         "multiplier": 1.0,
     }
 
@@ -379,57 +375,41 @@ def build_leverage_guide(available_cash: float) -> str:
 
             if dd <= -15:
                 lev_t = lev["3x"]
-                base_pct = 5.0
-                amt = available_cash * (base_pct / 100) * mult
+                amt = available_cash * 0.05 * mult
+                advice = timing["advice"]
                 guide_lines.append(
-                    f"🔴 <b>{base_ticker}</b>({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
-                    f"   📊 {timing['label']}\n"
-                    f"   → <b>{lev_t} 3x</b>  권장 <b>${amt:.0f}</b>  "
-                    f"<i>(가용현금 {base_pct}% × {mult:.1f}배)</i>\n"
-                    f"   💡 {timing['advice']}"
+                    f"🔴 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
                 )
                 any_signal = True
             elif dd <= -10:
                 lev_t = lev["3x"]
-                base_pct = 3.0
-                amt = available_cash * (base_pct / 100) * mult
+                amt = available_cash * 0.03 * mult
+                advice = timing["advice"]
                 guide_lines.append(
-                    f"🟠 <b>{base_ticker}</b>({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
-                    f"   📊 {timing['label']}\n"
-                    f"   → <b>{lev_t} 3x</b>  권장 <b>${amt:.0f}</b>  "
-                    f"<i>(가용현금 {base_pct}% × {mult:.1f}배)</i>\n"
-                    f"   💡 {timing['advice']}"
+                    f"🟠 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
                 )
                 any_signal = True
             elif dd <= -5:
                 lev_t = lev["2x"]
                 if lev_t:
-                    base_pct = 1.5
-                    amt = available_cash * (base_pct / 100) * mult
+                    amt = available_cash * 0.015 * mult
+                    advice = timing["advice"]
                     guide_lines.append(
-                        f"🟡 <b>{base_ticker}</b>({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
-                        f"   📊 {timing['label']}\n"
-                        f"   → <b>{lev_t} 2x</b>  권장 <b>${amt:.0f}</b>  "
-                        f"<i>(가용현금 {base_pct}% × {mult:.1f}배)</i>\n"
-                        f"   💡 {timing['advice']}"
+                        f"🟡 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
                     )
                     any_signal = True
             else:
-                guide_lines.append(
-                    f"⚪ {base_ticker}({name}) 고점 대비 {dd:+.1f}%  — 대기 중"
-                )
+                guide_lines.append(f"⚪ {base_ticker} {dd:+.1f}%  — 대기 중")
         except Exception as e:
             print(f"[leverage_guide] {base_ticker} 오류: {e}")
 
     if not guide_lines:
         return ""
 
-    lines = [f"<b>📐 레버리지 매수 가이드</b>  <i>(가용현금 ${available_cash:,.0f} 기준)</i>"]
+    lines = [f"<b>📐 레버리지 가이드</b>  <i>가용현금 ${available_cash:,.0f}</i>"]
     lines.extend(guide_lines)
     if any_signal:
-        lines.append(
-            "<i>⚡ 한 번에 다 안 들어감 — 위 금액은 1회분. 신호가 반복되면 분할로 추가 진입.</i>"
-        )
+        lines.append("<i>1회 진입 금액 — 같은 신호 반복 시 분할 추가</i>")
     return "\n".join(lines)
 
 
@@ -903,7 +883,7 @@ def build_report() -> str:
         line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{w52_tag}"
         line += f"\n   → {action}"
         if reasons:
-            line += f"  |  <i>{' · '.join(reasons)}</i>"
+            line += f"  <i>{' · '.join(reasons[:2])}</i>"
 
         # 극단 과열 감지 (위험점수 7+ 상황에서만 표시)
         if risk_score >= 7 and ticker in _config.HOLDINGS and _config.HOLDINGS[ticker] > 0.01:
@@ -968,7 +948,7 @@ def build_report() -> str:
         lines.append(div_section)
 
     lines.append("\n" + "━" * 28)
-    lines.append("🤖 <i>Stock Agent — 매일 08:00 자동 발송</i>")
+    lines.append("🤖 <i>Stock Agent — 평일 장 오픈 전 (08:30 ET) 자동 발송</i>")
 
     return "\n".join(lines)
 

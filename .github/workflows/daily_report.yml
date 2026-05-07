@@ -2,8 +2,8 @@ name: Daily Investment Report
 
 on:
   schedule:
-    # 매일 오전 8시 KST = 23:00 UTC (전날)
-    - cron: "0 23 * * *"
+    # 미국 장 오픈 30분 전 — 8:30am EDT (UTC-4) = 12:30 UTC
+    - cron: "30 12 * * 1-5"
   workflow_dispatch:  # 수동 실행 버튼
 
 jobs:
@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,4 +29,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          WATCH_STOCKS: ${{ secrets.WATCH_STOCKS }}
         run: python daily_report.py
