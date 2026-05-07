@@ -7,6 +7,7 @@ Daily Report — 종합 판단 버전
 import re
 import argparse
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -948,14 +949,44 @@ def build_report() -> str:
         lines.append(div_section)
 
     lines.append("\n" + "━" * 28)
-    lines.append("🤖 <i>Stock Agent — 평일 22:00 KST (장 오픈 30분 전) 자동 발송</i>")
+    lines.append("🤖 <i>Stock Agent — 평일 미국 장 오픈 후 30분 자동 발송 (DST 자동 반영)</i>")
 
     return "\n".join(lines)
 
 
 # ── 실행 ─────────────────────────────────────────────────────────
 
+def should_skip_run() -> tuple[bool, str]:
+    """
+    미국 동부 시간 기준 장 오픈 후 30분(10:00 ET ± 30분) 시점인지 확인.
+    DST(EDT/EST)를 자동 처리.
+    GitHub Actions에서 cron 두 개(14 UTC, 15 UTC)를 등록하므로
+    그 중 하나만 실제 발송하기 위한 게이트.
+    """
+    if os.getenv("FORCE_SEND") == "1":
+        return False, "FORCE_SEND=1 (수동 실행)"
+
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:
+        return True, f"주말 ({now_et:%a %H:%M ET})"
+
+    target_min = 10 * 60  # 10:00 ET
+    current_min = now_et.hour * 60 + now_et.minute
+    diff = current_min - target_min
+    if abs(diff) > 30:
+        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±30분)"
+
+    return False, f"발송 시간 맞음 ({now_et:%H:%M ET})"
+
+
 def run_once(test_mode: bool = False):
+    if not test_mode:
+        skip, reason = should_skip_run()
+        if skip:
+            print(f"[{datetime.now():%H:%M:%S}] 스킵: {reason}")
+            return
+        print(f"[{datetime.now():%H:%M:%S}] {reason}")
+
     print(f"[{datetime.now():%H:%M:%S}] 보고서 생성 중...")
     report = build_report()
     if test_mode:
