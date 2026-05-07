@@ -23,7 +23,6 @@ from telegram_notifier import send_message
 from config import Config
 from dca_calculator import build_dca_section
 from events import build_calendar_section
-from news_headlines import build_news_section
 from rebalancing import check_drifts
 
 _config = Config()
@@ -259,14 +258,16 @@ def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> s
             continue
         try:
             info = yf.Ticker(ticker).info
-            price = info.get("regularMarketPrice") or info.get("previousClose", 0)
-            div_yield = info.get("dividendYield") or 0
-            if div_yield and price and shares:
-                annual = price * shares * div_yield
+            # trailingAnnualDividendRate = 주당 연간 배당금 (USD) — yield보다 정확
+            annual_rate = info.get("trailingAnnualDividendRate") or 0
+            price = info.get("regularMarketPrice") or info.get("previousClose") or 0
+            if annual_rate and shares:
+                annual = shares * annual_rate
                 total_annual += annual
                 monthly = annual / 12
+                div_yield_pct = annual_rate / price * 100 if price else 0
                 if monthly >= 0.5:
-                    rows.append((ticker, monthly, div_yield * 100))
+                    rows.append((ticker, monthly, div_yield_pct))
         except Exception:
             pass
 
@@ -276,13 +277,13 @@ def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> s
     rows.sort(key=lambda x: x[1], reverse=True)
     lines = ["<b>💰 예상 배당 (이번 달)</b>"]
     for ticker, monthly, yld in rows:
-        lines.append(f"  <b>{ticker}</b>  ${monthly:.0f}  <i>({yld:.1f}%/yr)</i>")
+        lines.append(f"  <b>{ticker}</b>  ${monthly:.2f}  <i>({yld:.1f}%/yr)</i>")
 
     monthly_total = total_annual / 12
     nzd_str = f"  ≈  NZD {monthly_total * nzd_rate:.0f}" if nzd_rate else ""
     lines.append(f"  ─────────────────────")
-    lines.append(f"  <b>합계  ${monthly_total:.0f}/월{nzd_str}</b>")
-    lines.append(f"  <i>(연 ${total_annual:.0f}{f'  ≈  NZD {total_annual * nzd_rate:.0f}' if nzd_rate else ''})</i>")
+    lines.append(f"  <b>합계  ${monthly_total:.2f}/월{nzd_str}</b>")
+    lines.append(f"  <i>(연 ${total_annual:.2f}{f'  ≈  NZD {total_annual * nzd_rate:.0f}' if nzd_rate else ''})</i>")
     return "\n".join(lines)
 
 
@@ -828,14 +829,15 @@ def build_report() -> str:
 
     macro_lines = []
     if not buffett.get("error"):
-        macro_lines.append(f"  버핏지수    <b>{buffett['value']:.0f}%</b>  {buffett['level']}")
+        macro_lines.append(f"  버핏지수      <b>{buffett['value']:.0f}%</b>  {buffett['level']}")
     if not spread.get("error"):
-        macro_lines.append(f"  신용 스프레드  {spread['value']}%  {spread['level']}")
+        macro_lines.append(f"  신용스프레드  {spread['value']}%  {spread['level']}")
     if not yc.get("error"):
-        macro_lines.append(f"  장단기 금리차  {yc['value']:+.2f}%  {yc['level']}")
+        macro_lines.append(f"  장단기금리차  {yc['value']:+.2f}%  {yc['level']}")
 
     if macro_lines:
-        lines.append("\n<b>🌍 거시 경고</b>")
+        lines.append("")
+        lines.append("<b>🌍 거시 경고</b>")
         lines.extend(macro_lines)
 
     if mkt_score >= 6:
@@ -917,17 +919,25 @@ def build_report() -> str:
             hold_list.append(line)
 
     if buy_list:
-        lines.append("\n🟢 <b>매수 기회</b>")
-        lines.extend(buy_list)
+        lines.append("")
+        lines.append("🟢 <b>매수 기회</b>")
+        lines.append("")
+        lines.extend(("\n" + l) for l in buy_list)
     if hold_list:
-        lines.append("\n⚪ <b>홀딩</b>")
-        lines.extend(hold_list)
+        lines.append("")
+        lines.append("⚪ <b>홀딩</b>")
+        lines.append("")
+        lines.extend(("\n" + l) for l in hold_list)
     if cash_list:
-        lines.append("\n🟠 <b>현금 비중 확대 검토</b>")
-        lines.extend(cash_list)
+        lines.append("")
+        lines.append("🟠 <b>현금 비중 확대 검토</b>")
+        lines.append("")
+        lines.extend(("\n" + l) for l in cash_list)
     if sell_list:
-        lines.append("\n🔴 <b>매도 고려</b>")
-        lines.extend(sell_list)
+        lines.append("")
+        lines.append("🔴 <b>매도 고려</b>")
+        lines.append("")
+        lines.extend(("\n" + l) for l in sell_list)
 
     # ── 극단 과열 경보 (위험점수 7+ 일 때만) ─────────────────────
     if extreme_overheat_list:
@@ -978,13 +988,7 @@ def build_report() -> str:
         lines.append("\n" + "━" * 28)
         lines.append(cal_section)
 
-    # ── [7] 보유 종목 뉴스 헤드라인 ───────────────────────────────
-    news_section = build_news_section(_config.HOLDINGS, top_n=3, max_age_hours=48)
-    if news_section:
-        lines.append("\n" + "━" * 28)
-        lines.append(news_section)
-
-    # ── [7.5] 리밸런싱 알림 (드리프트 ±5%p 초과 시만) ─────────────
+    # ── [7] 리밸런싱 알림 (드리프트 ±5%p 초과 시만) ──────────────
     try:
         drifts = check_drifts()
         if drifts:
@@ -994,13 +998,12 @@ def build_report() -> str:
                 arrow = "🔴" if d["drift_pct"] > 0 else "🔵"
                 tip = ""
                 if d["drift_pct"] < 0 and d["preferred"]:
-                    tip = f" → {', '.join(d['preferred'])}"
+                    tip = f" → {', '.join(d['preferred'])} 위주"
                 lines.append(
                     f"  {arrow} <b>{d['category']}</b>  "
                     f"{d['current_pct']:.1f}% / {d['target_pct']:.0f}% "
                     f"({d['drift_pct']:+.1f}%p){tip}"
                 )
-            lines.append("  <i>전체 보기: /rebalance</i>")
     except Exception as e:
         print(f"[rebalance] {e}")
 
