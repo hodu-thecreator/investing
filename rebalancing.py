@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import yfinance as yf
 
 from config import Config
@@ -58,16 +60,26 @@ DRIFT_THRESHOLD = 0.05  # ±5%p
 
 
 def _price(ticker: str) -> float | None:
-    for attempt in range(2):
-        try:
-            df = yf.Ticker(ticker).history(period="2d")
-            if df is not None and not df.empty:
-                return float(df["Close"].iloc[-1])
-        except Exception:
-            pass
-        if attempt == 0:
-            time.sleep(1)
+    try:
+        df = yf.Ticker(ticker).history(period="2d")
+        if df is not None and not df.empty:
+            return float(df["Close"].iloc[-1])
+    except Exception:
+        pass
     return None
+
+
+def _fetch_prices(tickers: list[str]) -> dict[str, float]:
+    """병렬로 가격 조회 — /rebalance 응답 속도 개선."""
+    results: dict[str, float] = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = {ex.submit(_price, t): t for t in tickers}
+        for f in as_completed(futures):
+            t = futures[f]
+            p = f.result()
+            if p is not None:
+                results[t] = p
+    return results
 
 
 def calc_portfolio_state(
@@ -77,14 +89,13 @@ def calc_portfolio_state(
     holdings = holdings if holdings is not None else _config.HOLDINGS
     idle_cash = idle_cash if idle_cash is not None else _config.IDLE_CASH_USD
 
+    active = [t for t, q in holdings.items() if q and q > 0]
+    prices = _fetch_prices(active)
+
     ticker_values: dict[str, float] = {}
-    for t, q in holdings.items():
-        if not q or q <= 0:
-            continue
-        p = _price(t)
-        if p is None:
-            continue
-        ticker_values[t] = q * p
+    for t in active:
+        if t in prices:
+            ticker_values[t] = holdings[t] * prices[t]
 
     total = sum(ticker_values.values()) + idle_cash
     if total <= 0:
