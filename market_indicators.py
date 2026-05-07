@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Market Indicators Module
-CNN 공포/탐욕, VIX, Put/Call 비율, AAII 심리, FRED 경제지표를 수집합니다.
+CNN 공포/탐욕, VIX, Put/Call 비율, AAII 심리, FRED 경제지표, NZD 환율을 수집합니다.
 """
 
 import os
@@ -27,10 +27,6 @@ HEADERS = {
 # ── CNN 공포/탐욕 지수 ────────────────────────────────────────────
 
 def get_fear_greed() -> dict:
-    """
-    CNN Fear & Greed Index
-    출처: https://edition.cnn.com/markets/fear-and-greed
-    """
     url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
     try:
         r = requests.get(url, headers=HEADERS, timeout=10)
@@ -52,25 +48,27 @@ def get_fear_greed() -> dict:
         return {"error": str(e)}
 
 
-# ── VIX 지수 (yfinance) ──────────────────────────────────────────
+# ── VIX 지수 ─────────────────────────────────────────────────────
 
 def get_vix() -> dict:
-    """VIX 공포 지수 — Google Finance / yfinance"""
     for attempt in range(3):
         try:
-            vix = yf.Ticker("^VIX")
-            hist = vix.history(period="5d")
+            hist = yf.Ticker("^VIX").history(period="5d")
             if hist is not None and not hist.empty:
-                current = hist["Close"].iloc[-1]
-                prev = hist["Close"].iloc[-2] if len(hist) >= 2 else current
-                change = current - prev
-                level = (
-                    "극도 공포 (매수 기회)" if current >= 30
-                    else "공포" if current >= 20
-                    else "중립" if current >= 15
-                    else "과열 (주의)"
-                )
-                return {"current": round(current, 2), "change": round(change, 2), "level": level}
+                current = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
+                change = round(current - prev, 2)
+                if current >= 40:
+                    level = "극공포 🔥 적극 매수 구간"
+                elif current >= 30:
+                    level = "극공포 — 매수 적극 검토"
+                elif current >= 20:
+                    level = "공포 — 매수 기회"
+                elif current >= 15:
+                    level = "중립"
+                else:
+                    level = "과열 (주의)"
+                return {"current": round(current, 2), "change": change, "level": level}
         except Exception:
             pass
         if attempt < 2:
@@ -81,23 +79,18 @@ def get_vix() -> dict:
 # ── CBOE Put/Call 비율 ────────────────────────────────────────────
 
 def get_put_call_ratio() -> dict:
-    """
-    CBOE 총 Put/Call 비율
-    yfinance로 근사값을 제공합니다.
-    """
     for attempt in range(3):
         try:
-            pcr = yf.Ticker("^PCCE")  # Equity PCR
-            hist = pcr.history(period="5d")
+            hist = yf.Ticker("^PCCE").history(period="5d")
             if hist is not None and not hist.empty:
-                current = round(hist["Close"].iloc[-1], 3)
+                current = round(float(hist["Close"].iloc[-1]), 3)
                 level = (
                     "극도 공포 (매수 신호)" if current >= 1.0
                     else "공포" if current >= 0.8
                     else "중립" if current >= 0.6
                     else "탐욕 (과열)"
                 )
-                return {"current": current, "level": level, "note": "CBOE Equity PCR"}
+                return {"current": current, "level": level}
         except Exception:
             pass
         if attempt < 2:
@@ -108,33 +101,22 @@ def get_put_call_ratio() -> dict:
 # ── AAII 투자자 심리 설문 ─────────────────────────────────────────
 
 def get_aaii_sentiment() -> dict:
-    """
-    AAII Investor Sentiment Survey (주간)
-    출처: https://www.aaii.com/sentimentsurvey
-    """
     url = "https://www.aaii.com/sentimentsurvey/sent_results"
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
-
-        # 테이블에서 최신 행 파싱
         table = soup.find("table", {"id": "sentiment"})
         if not table:
-            # 대체: 요약 수치만 가져오기
             return _parse_aaii_summary(soup)
-
         rows = table.find_all("tr")
         if len(rows) < 2:
             return {"error": "AAII 테이블 파싱 실패"}
-
         cells = rows[1].find_all("td")
         if len(cells) < 4:
             return {"error": "AAII 데이터 셀 부족"}
-
         def pct(val: str) -> float:
             return float(val.strip().replace("%", ""))
-
         return {
             "date": cells[0].get_text(strip=True),
             "bullish": pct(cells[1].get_text()),
@@ -146,7 +128,6 @@ def get_aaii_sentiment() -> dict:
 
 
 def _parse_aaii_summary(soup: BeautifulSoup) -> dict:
-    """AAII 요약 수치 대체 파서"""
     try:
         text = soup.get_text(" ")
         import re
@@ -162,10 +143,70 @@ def _parse_aaii_summary(soup: BeautifulSoup) -> dict:
         return {"error": "AAII 파싱 실패"}
 
 
-# ── FRED 경제지표 (공통) ─────────────────────────────────────────
+# ── S&P 500 섹터 MA 위치 (브레드스 대용) ─────────────────────────
+
+def get_market_breadth() -> dict:
+    """
+    주요 섹터 ETF들의 50/200일선 위치로 시장 전반 강도 측정.
+    Barchart 대용 — 섹터별 이평선 상회 비율.
+    """
+    sector_etfs = ["XLK", "XLF", "XLV", "XLE", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE", "XLC"]
+    above_50, above_200, total = 0, 0, 0
+    for sym in sector_etfs:
+        try:
+            df = yf.Ticker(sym).history(period="1y")
+            if df.empty:
+                continue
+            close = df["Close"].squeeze()
+            price = float(close.iloc[-1])
+            if len(close) >= 50:
+                ma50 = float(close.rolling(50).mean().iloc[-1])
+                if price > ma50:
+                    above_50 += 1
+            if len(close) >= 200:
+                ma200 = float(close.rolling(200).mean().iloc[-1])
+                if price > ma200:
+                    above_200 += 1
+            total += 1
+        except Exception:
+            pass
+    if total == 0:
+        return {"error": "섹터 데이터 없음"}
+    pct_50 = round(above_50 / total * 100)
+    pct_200 = round(above_200 / total * 100)
+    return {
+        "pct_above_50": pct_50,
+        "pct_above_200": pct_200,
+        "sectors_checked": total,
+    }
+
+
+# ── NZD/USD 환율 ─────────────────────────────────────────────────
+
+def get_nzd_rate() -> dict:
+    """USD → NZD 환율 (1 USD = ? NZD)"""
+    # 1순위: frankfurter.app (무료, 키 불필요)
+    try:
+        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=NZD", timeout=8)
+        r.raise_for_status()
+        rate = r.json()["rates"]["NZD"]
+        return {"usd_to_nzd": round(rate, 4), "source": "frankfurter"}
+    except Exception:
+        pass
+    # 2순위: open.er-api.com
+    try:
+        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=8)
+        r.raise_for_status()
+        rate = r.json()["rates"]["NZD"]
+        return {"usd_to_nzd": round(rate, 4), "source": "er-api"}
+    except Exception:
+        pass
+    return {"error": "환율 조회 실패"}
+
+
+# ── FRED 경제지표 ─────────────────────────────────────────────────
 
 def _fred_latest(series_id: str, label: str) -> dict:
-    """FRED API에서 최신 데이터 포인트 가져오기"""
     if not FRED_API_KEY:
         return {"error": f"FRED_API_KEY 미설정 ({label})"}
     url = "https://api.stlouisfed.org/fred/series/observations"
@@ -187,75 +228,34 @@ def _fred_latest(series_id: str, label: str) -> dict:
         val = float(latest["value"]) if latest["value"] != "." else None
         prev_val = float(prev["value"]) if prev and prev["value"] != "." else None
         change = round(val - prev_val, 3) if val and prev_val else None
-        return {
-            "date": latest["date"],
-            "value": val,
-            "prev": prev_val,
-            "change": change,
-        }
+        return {"date": latest["date"], "value": val, "prev": prev_val, "change": change}
     except Exception as e:
         return {"error": str(e)}
 
 
-def get_jolts() -> dict:
-    """JOLTS 구인건수 (단위: 천 명) — investing.com 동일 지표"""
-    return _fred_latest("JTSJOL", "JOLTS")
-
-
-def get_cpi() -> dict:
-    """소비자 물가지수 CPI (YoY %)"""
-    result = _fred_latest("CPIAUCSL", "CPI")
-    # 전월 대비 % 변화를 전년 동월 대비로 별도 계산
-    if not result.get("error") and FRED_API_KEY:
-        try:
-            yoy = _fred_latest("CPIAUCNS", "CPI YoY")  # 시계열 12개월치
-            # 간단히 레벨 값 반환 후 리포트에서 서술
-            pass
-        except Exception:
-            pass
-    return result
-
-
-def get_consumer_sentiment() -> dict:
-    """미시간대 소비자심리지수 (UMCSENT)"""
-    return _fred_latest("UMCSENT", "소비자심리")
-
-
-def get_consumer_confidence() -> dict:
-    """컨퍼런스보드 소비자신뢰지수 (CONCCONF)"""
-    return _fred_latest("CONCCONF", "소비자신뢰")
-
-
 def get_fed_rate() -> dict:
-    """연방기금금리 (FEDFUNDS) — 금리결정 현황"""
     return _fred_latest("FEDFUNDS", "연방기금금리")
 
 
-def get_margin_debt() -> dict:
-    """FINRA 마진 부채 (DPSACBW027SBOG 근사)"""
-    return _fred_latest("DPSACBW027SBOG", "마진부채")
+def get_consumer_sentiment() -> dict:
+    return _fred_latest("UMCSENT", "소비자심리")
 
 
 # ── 전체 수집 ────────────────────────────────────────────────────
 
 def collect_all() -> dict:
-    """모든 지표를 수집해서 딕셔너리로 반환"""
     print("  시장 지표 수집 중...", flush=True)
     return {
         "fear_greed": get_fear_greed(),
         "vix": get_vix(),
         "put_call": get_put_call_ratio(),
         "aaii": get_aaii_sentiment(),
-        "jolts": get_jolts(),
-        "cpi": get_cpi(),
-        "consumer_sentiment": get_consumer_sentiment(),
-        "consumer_confidence": get_consumer_confidence(),
+        "breadth": get_market_breadth(),
+        "nzd": get_nzd_rate(),
         "fed_rate": get_fed_rate(),
-        "margin_debt": get_margin_debt(),
+        "consumer_sentiment": get_consumer_sentiment(),
     }
 
-
-# ── 간단 테스트 ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import json

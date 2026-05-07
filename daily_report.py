@@ -89,22 +89,21 @@ def calc_52w_position(df: pd.DataFrame) -> dict | None:
     return {"low": low52, "high": high52, "pos_pct": round(pos, 1)}
 
 
-def build_dividend_section(holdings: dict[str, float]) -> str:
+def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> str:
     """보유 주수 기반 이번 달 예상 배당금 계산"""
     rows = []
     total_annual = 0.0
 
-    tickers_with_holdings = [(t, s) for t, s in holdings.items() if s > 0.01]
-
-    for ticker, shares in tickers_with_holdings:
+    for ticker, shares in holdings.items():
+        if shares < 0.01:
+            continue
         try:
             info = yf.Ticker(ticker).info
             price = info.get("regularMarketPrice") or info.get("previousClose", 0)
-            div_yield = info.get("dividendYield") or 0  # 연간 배당수익률 (소수)
+            div_yield = info.get("dividendYield") or 0
             if div_yield and price and shares:
                 annual = price * shares * div_yield
                 total_annual += annual
-                freq = info.get("dividendRate", 0)
                 monthly = annual / 12
                 if monthly >= 0.5:
                     rows.append((ticker, monthly, div_yield * 100))
@@ -115,10 +114,15 @@ def build_dividend_section(holdings: dict[str, float]) -> str:
         return ""
 
     rows.sort(key=lambda x: x[1], reverse=True)
-    lines = ["<b>💰 이번 달 예상 배당</b>"]
+    lines = ["<b>💰 예상 배당 (이번 달)</b>"]
     for ticker, monthly, yld in rows:
-        lines.append(f"  {ticker}  ${monthly:.1f}  ({yld:.1f}%/yr)")
-    lines.append(f"  <b>합계: ${total_annual / 12:.0f}/월  (연 ${total_annual:.0f})</b>")
+        lines.append(f"  <b>{ticker}</b>  ${monthly:.0f}  <i>({yld:.1f}%/yr)</i>")
+
+    monthly_total = total_annual / 12
+    nzd_str = f"  ≈  NZD {monthly_total * nzd_rate:.0f}" if nzd_rate else ""
+    lines.append(f"  ─────────────────────")
+    lines.append(f"  <b>합계  ${monthly_total:.0f}/월{nzd_str}</b>")
+    lines.append(f"  <i>(연 ${total_annual:.0f}{f'  ≈  NZD {total_annual * nzd_rate:.0f}' if nzd_rate else ''})</i>")
     return "\n".join(lines)
 
 
@@ -335,42 +339,60 @@ def market_score(indicators: dict) -> tuple:
     fg = indicators.get("fear_greed", {})
     if not fg.get("error"):
         s = fg["score"]
-        if s <= 25:
-            score += 3; reasons.append(f"극도 공포 (F&G {s})")
+        if s <= 20:
+            score += 4; reasons.append(f"극도 공포 (F&G {s})")
+        elif s <= 35:
+            score += 3; reasons.append(f"공포 (F&G {s})")
         elif s <= 45:
-            score += 2; reasons.append(f"공포 구간 (F&G {s})")
-        elif s >= 75:
-            score -= 2; reasons.append(f"극도 탐욕 (F&G {s})")
-        elif s >= 60:
-            score -= 1; reasons.append(f"탐욕 구간 (F&G {s})")
+            score += 1; reasons.append(f"약한 공포 (F&G {s})")
+        elif s >= 80:
+            score -= 3; reasons.append(f"극도 탐욕 (F&G {s})")
+        elif s >= 65:
+            score -= 2; reasons.append(f"탐욕 (F&G {s})")
+        elif s >= 55:
+            score -= 1; reasons.append(f"약한 탐욕 (F&G {s})")
 
     vix = indicators.get("vix", {})
     if not vix.get("error"):
         v = vix["current"]
-        if v >= 30:
-            score += 3; reasons.append(f"VIX 극공포 ({v})")
+        if v >= 40:
+            score += 5; reasons.append(f"VIX {v} 🔥 극공포 — 적극 매수 구간")
+        elif v >= 30:
+            score += 3; reasons.append(f"VIX {v} — 매수 적극 검토")
         elif v >= 20:
-            score += 2; reasons.append(f"VIX 공포 ({v})")
+            score += 2; reasons.append(f"VIX {v} — 매수 기회")
         elif v < 15:
-            score -= 1; reasons.append(f"VIX 낮음 ({v})")
+            score -= 1; reasons.append(f"VIX {v} (과열 주의)")
 
     pc = indicators.get("put_call", {})
     if not pc.get("error"):
         r = pc["current"]
         if r >= 1.0:
-            score += 2; reasons.append(f"Put/Call 극공포 ({r})")
+            score += 2; reasons.append(f"Put/Call {r} (극공포)")
         elif r >= 0.8:
-            score += 1; reasons.append(f"Put/Call 공포 ({r})")
+            score += 1; reasons.append(f"Put/Call {r} (공포)")
         elif r < 0.6:
-            score -= 1; reasons.append(f"Put/Call 탐욕 ({r})")
+            score -= 1; reasons.append(f"Put/Call {r} (탐욕)")
 
     aaii = indicators.get("aaii", {})
     if not aaii.get("error") and aaii.get("bearish") is not None:
         bear = aaii["bearish"]
-        if bear >= 45:
-            score += 2; reasons.append(f"AAII 약세 과반 ({bear:.0f}%) → 역발상 매수 신호")
+        if bear >= 50:
+            score += 3; reasons.append(f"AAII 약세 {bear:.0f}% — 강한 역발상 신호")
+        elif bear >= 40:
+            score += 2; reasons.append(f"AAII 약세 {bear:.0f}% — 매수 신호")
         elif bear >= 35:
             score += 1; reasons.append(f"AAII 약세 우세 ({bear:.0f}%)")
+
+    breadth = indicators.get("breadth", {})
+    if not breadth.get("error"):
+        p200 = breadth.get("pct_above_200", 50)
+        if p200 <= 30:
+            score += 2; reasons.append(f"섹터 {p200}%만 200일선 위 (저점 신호)")
+        elif p200 <= 45:
+            score += 1; reasons.append(f"섹터 {p200}% 200일선 위")
+        elif p200 >= 80:
+            score -= 1; reasons.append(f"섹터 {p200}% 200일선 위 (과열)")
 
     return score, reasons
 
@@ -423,15 +445,19 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
     env_weight = 2 if leverage else 1
     total = stock_score + (mkt_score * env_weight // 3)
 
-    # 5. 최종 판단
-    if total >= 4:
+    # 5. 최종 판단 (적립식 장기투자 기준 — 매도 신호 신중하게)
+    if total >= 5:
+        action, emoji = "📈 적극 매수", "🟢"
+    elif total >= 3:
         action, emoji = "📈 매수", "🟢"
-    elif total >= 2:
+    elif total >= 1:
         action, emoji = "🔍 분할매수 검토", "🟡"
-    elif total <= -2:
-        action, emoji = "📉 매도 고려", "🔴"
-    else:
+    elif total >= -2:
         action, emoji = "⏸ 홀딩", "⚪"
+    elif total >= -4:
+        action, emoji = "💵 현금 비중 확대 검토", "🟠"
+    else:
+        action, emoji = "📉 매도 고려", "🔴"
 
     return {
         "action": action,
@@ -451,44 +477,81 @@ def build_report() -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
     lines.append(f"<b>📊 투자 판단 브리핑</b>  {now}")
-    lines.append("━" * 30)
+    lines.append("━" * 28)
 
-    # 시장 환경 분석
+    # ── 지표 수집 ──────────────────────────────────────────────────
     indicators = collect_all()
     mkt_score, mkt_reasons = market_score(indicators)
+    nzd_rate = indicators.get("nzd", {}).get("usd_to_nzd", 0)
 
-    if mkt_score >= 4:
+    # ── [1] 주요 지표 섹션 ─────────────────────────────────────────
+    lines.append("\n<b>📈 주요 지표</b>")
+
+    fg = indicators.get("fear_greed", {})
+    if not fg.get("error"):
+        trend = ""
+        if fg.get("week_ago"):
+            diff = fg["score"] - fg["week_ago"]
+            trend = f"  {'↑' if diff > 0 else '↓'}{abs(diff):.0f} (1주 전 {fg['week_ago']})"
+        lines.append(f"  공포/탐욕  <b>{fg['score']}</b> {fg.get('rating','')}{trend}")
+
+    vix = indicators.get("vix", {})
+    if not vix.get("error"):
+        chg = f"{'↑' if vix['change'] > 0 else '↓'}{abs(vix['change'])}"
+        lines.append(f"  VIX        <b>{vix['current']}</b> {chg}  |  {vix['level']}")
+
+    aaii = indicators.get("aaii", {})
+    if not aaii.get("error") and aaii.get("bullish") is not None:
+        lines.append(
+            f"  AAII       강세 {aaii['bullish']:.0f}%  중립 {aaii.get('neutral',0):.0f}%  약세 {aaii['bearish']:.0f}%"
+        )
+
+    pc = indicators.get("put_call", {})
+    if not pc.get("error"):
+        lines.append(f"  Put/Call   {pc['current']}  ({pc['level']})")
+
+    breadth = indicators.get("breadth", {})
+    if not breadth.get("error"):
+        lines.append(
+            f"  섹터 MA    50일선 위 {breadth['pct_above_50']}%  |  200일선 위 {breadth['pct_above_200']}%"
+        )
+
+    fed = indicators.get("fed_rate", {})
+    if not fed.get("error") and fed.get("value"):
+        lines.append(f"  기준금리   {fed['value']}%")
+
+    if mkt_score >= 6:
+        mkt_label = "🟢 강한 매수 구간"
+    elif mkt_score >= 3:
         mkt_label = "🟢 매수 우호적"
-    elif mkt_score >= 2:
-        mkt_label = "🟡 중립 (신중 매수)"
-    elif mkt_score <= -2:
-        mkt_label = "🔴 리스크 높음"
-    else:
+    elif mkt_score >= 1:
+        mkt_label = "🟡 중립 (분할 매수 검토)"
+    elif mkt_score >= -2:
         mkt_label = "⚪ 중립"
+    elif mkt_score >= -4:
+        mkt_label = "🟠 주의 (현금 비중 확대)"
+    else:
+        mkt_label = "🔴 위험 (방어적 포지션)"
 
-    lines.append(f"\n<b>시장 환경: {mkt_label}</b>")
-    if mkt_reasons:
-        lines.append("  " + " · ".join(mkt_reasons))
+    lines.append(f"\n  종합: <b>{mkt_label}</b>  (점수 {mkt_score:+d})")
 
-    # 주요 뉴스 + 투자 대응
+    # ── Claude 섹션 (뉴스 해설 + 포트폴리오 점검) ─────────────────
     news_items = fetch_market_news()
     commentary = generate_news_commentary(news_items, mkt_score, mkt_reasons)
     if commentary:
-        lines.append("")
+        lines.append("\n" + "━" * 28)
         lines.append(commentary)
-        lines.append("━" * 15)
 
-    # 적립 포트폴리오 점검 + 편입/퇴출 추천
     accum_report = generate_accumulation_report(mkt_score, news_items)
     if accum_report:
-        lines.append("")
+        lines.append("\n" + "━" * 28)
         lines.append(accum_report)
-        lines.append("━" * 15)
 
-    # 종목별 판단
-    lines.append(f"\n<b>종목별 판단</b>")
+    # ── [2] 종목별 판단 섹션 ──────────────────────────────────────
+    lines.append("\n" + "━" * 28)
+    lines.append("<b>🏦 종목별 판단</b>")
 
-    buy_list, hold_list, sell_list = [], [], []
+    buy_list, hold_list, cash_list, sell_list = [], [], [], []
 
     for ticker in PORTFOLIO:
         result = judge_ticker(ticker, mkt_score)
@@ -497,51 +560,54 @@ def build_report() -> str:
         price = result["price"]
         drawdown = result["drawdown"]
         reasons = result["reasons"]
-
         rsi = result.get("rsi")
         w52 = result.get("w52")
 
         rsi_tag = ""
         if rsi is not None:
             if rsi >= 70:
-                rsi_tag = f" RSI {rsi}🔴"
+                rsi_tag = f"  RSI {rsi}🔴"
             elif rsi <= 30:
-                rsi_tag = f" RSI {rsi}🟢"
+                rsi_tag = f"  RSI {rsi}🟢"
             else:
-                rsi_tag = f" RSI {rsi}"
+                rsi_tag = f"  RSI {rsi}"
 
-        w52_tag = ""
-        if w52:
-            w52_tag = f" 52주{w52['pos_pct']:.0f}%"
+        w52_tag = f"  52주 {w52['pos_pct']:.0f}%" if w52 else ""
 
-        line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{w52_tag}  → {action}"
+        line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{w52_tag}"
+        line += f"\n   → {action}"
         if reasons:
-            line += f"\n   <i>{' · '.join(reasons)}</i>"
+            line += f"  |  <i>{' · '.join(reasons)}</i>"
 
-        if "매수" in action:
+        if "적극 매수" in action or ("매수" in action and "현금" not in action):
             buy_list.append(line)
+        elif "현금" in action:
+            cash_list.append(line)
         elif "매도" in action:
             sell_list.append(line)
         else:
             hold_list.append(line)
 
     if buy_list:
-        lines.append("\n🟢 <b>매수 대상</b>")
+        lines.append("\n🟢 <b>매수 기회</b>")
         lines.extend(buy_list)
-    if sell_list:
-        lines.append("\n🔴 <b>매도 검토</b>")
-        lines.extend(sell_list)
     if hold_list:
         lines.append("\n⚪ <b>홀딩</b>")
         lines.extend(hold_list)
+    if cash_list:
+        lines.append("\n🟠 <b>현금 비중 확대 검토</b>")
+        lines.extend(cash_list)
+    if sell_list:
+        lines.append("\n🔴 <b>매도 고려</b>")
+        lines.extend(sell_list)
 
-    # 월 배당 예상
-    div_section = build_dividend_section(_config.HOLDINGS)
+    # ── [3] 예상 배당 섹션 ────────────────────────────────────────
+    div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)
     if div_section:
-        lines.append("\n" + "━" * 15)
+        lines.append("\n" + "━" * 28)
         lines.append(div_section)
 
-    lines.append("\n" + "━" * 15)
+    lines.append("\n" + "━" * 28)
     lines.append("🤖 <i>Stock Agent — 매일 08:00 자동 발송</i>")
 
     return "\n".join(lines)
