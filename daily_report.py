@@ -291,15 +291,74 @@ _LEVERAGE_MAP = {
 }
 
 
+def _calc_entry_timing(close: pd.Series) -> dict:
+    """
+    매수 타이밍 분석 — 모멘텀(5일 수익률) + RSI + 5일선 위치.
+    소수점 매수가 가능하므로 분할 진입을 권장하고,
+    하락 가속 구간에는 사이즈를 줄여 다음 신호를 기다리게 한다.
+
+    multiplier: 권장 금액에 곱하는 계수 (0.3 ~ 1.3)
+    """
+    if len(close) < 14:
+        return {"phase": "unknown", "label": "데이터 부족", "multiplier": 1.0}
+
+    current = float(close.iloc[-1])
+    ma5 = float(close.rolling(5).mean().iloc[-1])
+    ret_5d = (current - float(close.iloc[-6])) / float(close.iloc[-6]) * 100 if len(close) >= 6 else 0
+    ret_1d = (current - float(close.iloc[-2])) / float(close.iloc[-2]) * 100 if len(close) >= 2 else 0
+
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, float("nan"))
+    rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+
+    above_ma5 = current > ma5
+
+    # 1) 과매도 반등: RSI 30 이하 → 적극 진입
+    if rsi <= 30:
+        return {
+            "phase": "oversold",
+            "label": f"🟢 과매도 — 매수 적기 (RSI {rsi:.0f}, 5일 {ret_5d:+.1f}%)",
+            "advice": "지금 진입 (1.3배)",
+            "multiplier": 1.3,
+        }
+    # 2) 반등 시작: 5일 양전환 + 5일선 상회
+    if ret_5d > 0.5 and above_ma5:
+        return {
+            "phase": "rebound",
+            "label": f"🟢 반등 시작 (5일 {ret_5d:+.1f}%, RSI {rsi:.0f})",
+            "advice": "지금 진입 (1.3배)",
+            "multiplier": 1.3,
+        }
+    # 3) 하락 가속: 5일 -3%↓ + 5일선 하회 + RSI 35↑ (아직 과매도 전)
+    if ret_5d <= -3 and not above_ma5 and rsi > 35:
+        return {
+            "phase": "falling",
+            "label": f"🔴 하락 진행 중 (5일 {ret_5d:+.1f}%, RSI {rsi:.0f})",
+            "advice": "더 떨어질 가능성 — 0.3배만 진입, 다음 신호 대기",
+            "multiplier": 0.3,
+        }
+    # 4) 안정화 — 그 외
+    return {
+        "phase": "stabilizing",
+        "label": f"🟡 안정화 중 (5일 {ret_5d:+.1f}%, RSI {rsi:.0f})",
+        "advice": "분할 매수 시작 (정상 수량)",
+        "multiplier": 1.0,
+    }
+
+
 def build_leverage_guide(available_cash: float) -> str:
     """
-    SPYM/QQQM/SOXQ의 60일 고점 대비 낙폭을 추적해
+    SPYM/QQQM/SOXQ의 60일 고점 대비 낙폭 + 진입 타이밍을 분석해
     2x/3x 레버리지 매수 시점과 권장 금액을 제시.
 
-    포지션 사이징 원칙:
-      -5~-10%  → 2x ETF, 가용현금의 5%
-      -10~-15% → 3x ETF, 가용현금의 10%
-      -15%+    → 3x ETF, 가용현금의 15% (분할 진입 강조)
+    포지션 사이징 (분할 매수 친화적):
+      -5~-10%  → 2x ETF, 가용현금의 1.5%  × 타이밍 계수
+      -10~-15% → 3x ETF, 가용현금의 3%    × 타이밍 계수
+      -15%+    → 3x ETF, 가용현금의 5%    × 타이밍 계수
+
+    같은 신호가 며칠씩 반복되어도 매번 1회분만 들어가도록 작은 비율로 설계.
     """
     guide_lines = []
     any_signal = False
@@ -315,30 +374,44 @@ def build_leverage_guide(available_cash: float) -> str:
             dd = (current - high_60d) / high_60d * 100
 
             name = lev["name"]
+            timing = _calc_entry_timing(close)
+            mult = timing["multiplier"]
+
             if dd <= -15:
                 lev_t = lev["3x"]
-                amt = available_cash * 0.15
+                base_pct = 5.0
+                amt = available_cash * (base_pct / 100) * mult
                 guide_lines.append(
-                    f"🔴 {base_ticker}({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
-                    f"   → <b>{lev_t} 3x 적극 매수</b>  권장금액 <b>${amt:.0f}</b>  (가용현금 15%)\n"
-                    f"   <i>분할 3회 이상, 손절라인 -30% 설정 권장</i>"
+                    f"🔴 <b>{base_ticker}</b>({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
+                    f"   📊 {timing['label']}\n"
+                    f"   → <b>{lev_t} 3x</b>  권장 <b>${amt:.0f}</b>  "
+                    f"<i>(가용현금 {base_pct}% × {mult:.1f}배)</i>\n"
+                    f"   💡 {timing['advice']}"
                 )
                 any_signal = True
             elif dd <= -10:
                 lev_t = lev["3x"]
-                amt = available_cash * 0.10
+                base_pct = 3.0
+                amt = available_cash * (base_pct / 100) * mult
                 guide_lines.append(
-                    f"🟠 {base_ticker}({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
-                    f"   → <b>{lev_t} 3x 매수 검토</b>  권장금액 <b>${amt:.0f}</b>  (가용현금 10%)"
+                    f"🟠 <b>{base_ticker}</b>({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
+                    f"   📊 {timing['label']}\n"
+                    f"   → <b>{lev_t} 3x</b>  권장 <b>${amt:.0f}</b>  "
+                    f"<i>(가용현금 {base_pct}% × {mult:.1f}배)</i>\n"
+                    f"   💡 {timing['advice']}"
                 )
                 any_signal = True
             elif dd <= -5:
                 lev_t = lev["2x"]
                 if lev_t:
-                    amt = available_cash * 0.05
+                    base_pct = 1.5
+                    amt = available_cash * (base_pct / 100) * mult
                     guide_lines.append(
-                        f"🟡 {base_ticker}({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
-                        f"   → <b>{lev_t} 2x 소액 검토</b>  권장금액 <b>${amt:.0f}</b>  (가용현금 5%)"
+                        f"🟡 <b>{base_ticker}</b>({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
+                        f"   📊 {timing['label']}\n"
+                        f"   → <b>{lev_t} 2x</b>  권장 <b>${amt:.0f}</b>  "
+                        f"<i>(가용현금 {base_pct}% × {mult:.1f}배)</i>\n"
+                        f"   💡 {timing['advice']}"
                     )
                     any_signal = True
             else:
@@ -354,7 +427,9 @@ def build_leverage_guide(available_cash: float) -> str:
     lines = [f"<b>📐 레버리지 매수 가이드</b>  <i>(가용현금 ${available_cash:,.0f} 기준)</i>"]
     lines.extend(guide_lines)
     if any_signal:
-        lines.append("<i>⚡ 레버리지는 반드시 분할 매수, 총 포트폴리오의 20% 이내 유지</i>")
+        lines.append(
+            "<i>⚡ 한 번에 다 안 들어감 — 위 금액은 1회분. 신호가 반복되면 분할로 추가 진입.</i>"
+        )
     return "\n".join(lines)
 
 
