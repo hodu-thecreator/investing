@@ -7,6 +7,7 @@ Daily Report — 종합 판단 버전
 import re
 import argparse
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,8 +29,9 @@ ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 # ── 포트폴리오 설정 ──────────────────────────────────────────────
 _watch = os.getenv("WATCH_STOCKS", "")
 PORTFOLIO = [t.strip() for t in _watch.split(",") if t.strip()] or \
-            ["SPYM","QQQM","TQQQ","UPRO","CCJ","VRT","CEG","COPX","ETN"]
-MA_PERIODS = [20, 50, 200]
+            ["QQQI","SPYI","ETN","MU","VRT","AEHR","GEV",
+             "SOXL","UPRO","QLD","TQQQ","SSO","QQQM","SOXQ","SPYM","SCHD"]
+MA_PERIODS = [50, 200]
 
 
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
@@ -62,6 +64,354 @@ def calc_drawdown_from_high(df: pd.DataFrame) -> dict:
     high = float(close.max())
     drawdown_pct = (current - high) / high * 100 if high else 0
     return {"current": current, "high": high, "drawdown_pct": drawdown_pct}
+
+
+def calc_rsi(df: pd.DataFrame, period: int = 14) -> float | None:
+    close = df["Close"].squeeze()
+    if len(close) < period + 1:
+        return None
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(period).mean()
+    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    rs = gain / loss.replace(0, float("nan"))
+    rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+    return round(rsi, 1)
+
+
+def calc_52w_position(df: pd.DataFrame) -> dict | None:
+    close = df["Close"].squeeze()
+    if len(close) < 50:
+        return None
+    last252 = close.iloc[-252:] if len(close) >= 252 else close
+    low52 = float(last252.min())
+    high52 = float(last252.max())
+    current = float(close.iloc[-1])
+    pos = (current - low52) / (high52 - low52) * 100 if high52 != low52 else 50
+    return {"low": low52, "high": high52, "pos_pct": round(pos, 1)}
+
+
+def calc_macro_risk_score(indicators: dict) -> tuple[int, list[str]]:
+    """
+    거시 위험 점수 (0~10+, 높을수록 위험).
+    현금 비중 목표를 동적으로 조절하는 데 사용.
+    """
+    score = 0
+    signals = []
+
+    buffett = indicators.get("buffett", {})
+    if not buffett.get("error") and buffett.get("value"):
+        v = buffett["value"]
+        if v >= 220:
+            score += 3; signals.append(f"버핏지수 {v:.0f}% 극단 거품")
+        elif v >= 200:
+            score += 2; signals.append(f"버핏지수 {v:.0f}% 거품 구간")
+        elif v >= 180:
+            score += 1; signals.append(f"버핏지수 {v:.0f}% 고평가")
+
+    spread = indicators.get("credit_spread", {})
+    if not spread.get("error") and spread.get("value"):
+        v = spread["value"]
+        if v >= 4.0:
+            score += 3; signals.append(f"신용스프레드 {v}% 위기")
+        elif v >= 3.0:
+            score += 2; signals.append(f"신용스프레드 {v}% 위험")
+        elif v >= 2.5:
+            score += 1; signals.append(f"신용스프레드 {v}% 주의")
+
+    yc = indicators.get("yield_curve", {})
+    if not yc.get("error") and yc.get("value") is not None:
+        v = yc["value"]
+        prev = yc.get("prev")
+        if prev is not None and prev < 0 and v >= 0:
+            score += 3; signals.append("금리차 역전 해소 직후 — 6~12개월 주의")
+        elif v < 0:
+            score += 2; signals.append(f"금리차 역전 중 ({v:+.2f}%)")
+
+    fg = indicators.get("fear_greed", {})
+    if not fg.get("error") and fg.get("score"):
+        s = fg["score"]
+        if s >= 80:
+            score += 2; signals.append(f"극도 탐욕 (F&G {s})")
+        elif s >= 70:
+            score += 1; signals.append(f"탐욕 (F&G {s})")
+
+    vix = indicators.get("vix", {})
+    if not vix.get("error") and vix.get("current"):
+        v = vix["current"]
+        if v < 15:
+            score += 1; signals.append(f"VIX {v} 과열 (낮은 변동성)")
+
+    aaii = indicators.get("aaii", {})
+    if not aaii.get("error") and aaii.get("bullish") is not None:
+        bull = aaii["bullish"]
+        if bull >= 60:
+            score += 2; signals.append(f"AAII 강세 {bull:.0f}% 과열")
+        elif bull >= 55:
+            score += 1; signals.append(f"AAII 강세 {bull:.0f}%")
+
+    breadth = indicators.get("breadth", {})
+    if not breadth.get("error") and breadth.get("pct_above_200") is not None:
+        p200 = breadth["pct_above_200"]
+        if p200 >= 85:
+            score += 1; signals.append(f"섹터 {p200}% 200일선 위 과매수")
+
+    return score, signals
+
+
+def calc_cash_target(risk_score: int) -> float:
+    """위험 점수 → 현금 목표 비중"""
+    if risk_score >= 7:
+        return 0.30
+    elif risk_score >= 5:
+        return 0.25
+    elif risk_score >= 3:
+        return 0.22
+    return 0.20
+
+
+def check_extreme_overheated(ticker_data: dict) -> dict | None:
+    """극단 과열 판단 — risk_score 7+ 상황에서만 표시하는 선택적 익절 신호"""
+    rsi = ticker_data.get("rsi")
+    w52 = ticker_data.get("w52")
+    if rsi is None or not w52:
+        return None
+    if rsi >= 78 and w52["pos_pct"] >= 97:
+        return {
+            "emoji": "⚠️",
+            "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% — 극단 과열, 부분 차익 고려",
+        }
+    return None
+
+
+def build_cash_section(holdings: dict[str, float], idle_cash: float,
+                       base_target_ratio: float, cash_tickers: list[str],
+                       risk_score: int = 0, risk_signals: list[str] = None) -> tuple[str, float]:
+    """현재 현금 비중 vs 목표 비중 추적. (section_text, available_cash) 반환."""
+    cash_value = idle_cash
+    total_value = idle_cash
+    available_cash = idle_cash  # SGOV + idle
+
+    for ticker, shares in holdings.items():
+        if shares <= 0:
+            continue
+        try:
+            df = fetch_stock_data(ticker, period="5d")
+            if df.empty:
+                continue
+            price = float(df["Close"].squeeze().iloc[-1])
+            value = price * shares
+            total_value += value
+            if ticker in cash_tickers:
+                cash_value += value
+                available_cash += value
+        except Exception:
+            continue
+
+    if total_value <= 0:
+        return "", available_cash
+
+    target_ratio = calc_cash_target(risk_score)
+    ratio = cash_value / total_value
+    target_value = total_value * target_ratio
+    diff_pct = (ratio - target_ratio) * 100
+    diff_usd = cash_value - target_value
+
+    if risk_score >= 7:
+        target_label = f"🔴 {target_ratio*100:.0f}%  (위험 {risk_score}점 — 방어)"
+    elif risk_score >= 5:
+        target_label = f"🟠 {target_ratio*100:.0f}%  (위험 {risk_score}점)"
+    elif risk_score >= 3:
+        target_label = f"🟡 {target_ratio*100:.0f}%  (위험 {risk_score}점)"
+    else:
+        target_label = f"🟢 {target_ratio*100:.0f}%"
+
+    lines = ["<b>💵 현금 비중</b>"]
+    lines.append(f"  현재  <b>${cash_value:,.0f}</b>  ({ratio*100:.1f}%)")
+    lines.append(f"  목표  {target_label}")
+    lines.append(f"  총자산 ${total_value:,.0f}")
+
+    if abs(diff_pct) < 1.5:
+        lines.append("  ✅ 목표 달성")
+    elif diff_pct > 0:
+        lines.append(f"  💰 목표 +{diff_pct:.1f}%p 초과 (여유 ${diff_usd:.0f})")
+    else:
+        needed = -diff_usd
+        lines.append(f"  ⚠️ 목표 {abs(diff_pct):.1f}%p 부족")
+        lines.append(f"  → 신규 적립금 <b>${needed:.0f}</b>를 SGOV에 배분 권장")
+
+    if risk_signals:
+        lines.append(f"  <i>위험 신호: {' · '.join(risk_signals[:3])}</i>")
+
+    return "\n".join(lines), available_cash
+
+
+def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> str:
+    """보유 주수 기반 이번 달 예상 배당금 계산"""
+    rows = []
+    total_annual = 0.0
+
+    for ticker, shares in holdings.items():
+        if shares < 0.01:
+            continue
+        try:
+            info = yf.Ticker(ticker).info
+            price = info.get("regularMarketPrice") or info.get("previousClose", 0)
+            div_yield = info.get("dividendYield") or 0
+            if div_yield and price and shares:
+                annual = price * shares * div_yield
+                total_annual += annual
+                monthly = annual / 12
+                if monthly >= 0.5:
+                    rows.append((ticker, monthly, div_yield * 100))
+        except Exception:
+            pass
+
+    if not rows:
+        return ""
+
+    rows.sort(key=lambda x: x[1], reverse=True)
+    lines = ["<b>💰 예상 배당 (이번 달)</b>"]
+    for ticker, monthly, yld in rows:
+        lines.append(f"  <b>{ticker}</b>  ${monthly:.0f}  <i>({yld:.1f}%/yr)</i>")
+
+    monthly_total = total_annual / 12
+    nzd_str = f"  ≈  NZD {monthly_total * nzd_rate:.0f}" if nzd_rate else ""
+    lines.append(f"  ─────────────────────")
+    lines.append(f"  <b>합계  ${monthly_total:.0f}/월{nzd_str}</b>")
+    lines.append(f"  <i>(연 ${total_annual:.0f}{f'  ≈  NZD {total_annual * nzd_rate:.0f}' if nzd_rate else ''})</i>")
+    return "\n".join(lines)
+
+
+# ── 레버리지 매수 가이드 ──────────────────────────────────────────
+
+# 본주 → 레버리지 ETF 매핑 (2x / 3x)
+_LEVERAGE_MAP = {
+    "SPYM": {"2x": "SSO",  "3x": "UPRO", "name": "S&P500"},
+    "QQQM": {"2x": "QLD",  "3x": "TQQQ", "name": "나스닥100"},
+    "SOXQ": {"2x": None,   "3x": "SOXL", "name": "반도체"},
+}
+
+
+def _calc_entry_timing(close: pd.Series) -> dict:
+    """
+    매수 타이밍 분석 — 모멘텀(5일 수익률) + RSI + 5일선 위치.
+    소수점 매수가 가능하므로 분할 진입을 권장하고,
+    하락 가속 구간에는 사이즈를 줄여 다음 신호를 기다리게 한다.
+
+    multiplier: 권장 금액에 곱하는 계수 (0.3 ~ 1.3)
+    """
+    if len(close) < 14:
+        return {"phase": "unknown", "label": "데이터 부족", "multiplier": 1.0}
+
+    current = float(close.iloc[-1])
+    ma5 = float(close.rolling(5).mean().iloc[-1])
+    ret_5d = (current - float(close.iloc[-6])) / float(close.iloc[-6]) * 100 if len(close) >= 6 else 0
+    ret_1d = (current - float(close.iloc[-2])) / float(close.iloc[-2]) * 100 if len(close) >= 2 else 0
+
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, float("nan"))
+    rsi = float((100 - 100 / (1 + rs)).iloc[-1])
+
+    above_ma5 = current > ma5
+
+    # 1) 과매도 반등: RSI 30 이하 → 적극 진입
+    if rsi <= 30:
+        return {
+            "phase": "oversold",
+            "advice": f"🟢 적극 진입 (RSI {rsi:.0f} 과매도)",
+            "multiplier": 1.3,
+        }
+    # 2) 반등 시작: 5일 양전환 + 5일선 상회
+    if ret_5d > 0.5 and above_ma5:
+        return {
+            "phase": "rebound",
+            "advice": f"🟢 반등 신호 — 지금 진입",
+            "multiplier": 1.3,
+        }
+    # 3) 하락 가속: 5일 -3%↓ + 5일선 하회 + RSI 35↑ (아직 과매도 전)
+    if ret_5d <= -3 and not above_ma5 and rsi > 35:
+        return {
+            "phase": "falling",
+            "advice": f"⏸ 하락 진행 중 — 대기 (RSI {rsi:.0f})",
+            "multiplier": 0.3,
+        }
+    # 4) 안정화 — 그 외
+    return {
+        "phase": "stabilizing",
+        "advice": "🟡 분할 매수 시작",
+        "multiplier": 1.0,
+    }
+
+
+def build_leverage_guide(available_cash: float) -> str:
+    """
+    SPYM/QQQM/SOXQ의 60일 고점 대비 낙폭 + 진입 타이밍을 분석해
+    2x/3x 레버리지 매수 시점과 권장 금액을 제시.
+
+    포지션 사이징 (분할 매수 친화적):
+      -5~-10%  → 2x ETF, 가용현금의 1.5%  × 타이밍 계수
+      -10~-15% → 3x ETF, 가용현금의 3%    × 타이밍 계수
+      -15%+    → 3x ETF, 가용현금의 5%    × 타이밍 계수
+
+    같은 신호가 며칠씩 반복되어도 매번 1회분만 들어가도록 작은 비율로 설계.
+    """
+    guide_lines = []
+    any_signal = False
+
+    for base_ticker, lev in _LEVERAGE_MAP.items():
+        try:
+            df = fetch_stock_data(base_ticker, period="3mo")
+            if df.empty:
+                continue
+            close = df["Close"].squeeze()
+            current = float(close.iloc[-1])
+            high_60d = float(close.rolling(min(60, len(close))).max().iloc[-1])
+            dd = (current - high_60d) / high_60d * 100
+
+            name = lev["name"]
+            timing = _calc_entry_timing(close)
+            mult = timing["multiplier"]
+
+            if dd <= -15:
+                lev_t = lev["3x"]
+                amt = available_cash * 0.05 * mult
+                advice = timing["advice"]
+                guide_lines.append(
+                    f"🔴 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
+                )
+                any_signal = True
+            elif dd <= -10:
+                lev_t = lev["3x"]
+                amt = available_cash * 0.03 * mult
+                advice = timing["advice"]
+                guide_lines.append(
+                    f"🟠 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
+                )
+                any_signal = True
+            elif dd <= -5:
+                lev_t = lev["2x"]
+                if lev_t:
+                    amt = available_cash * 0.015 * mult
+                    advice = timing["advice"]
+                    guide_lines.append(
+                        f"🟡 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
+                    )
+                    any_signal = True
+            else:
+                guide_lines.append(f"⚪ {base_ticker} {dd:+.1f}%  — 대기 중")
+        except Exception as e:
+            print(f"[leverage_guide] {base_ticker} 오류: {e}")
+
+    if not guide_lines:
+        return ""
+
+    lines = [f"<b>📐 레버리지 가이드</b>  <i>가용현금 ${available_cash:,.0f}</i>"]
+    lines.extend(guide_lines)
+    if any_signal:
+        lines.append("<i>1회 진입 금액 — 같은 신호 반복 시 분할 추가</i>")
+    return "\n".join(lines)
 
 
 # ── 시장 뉴스 수집 + Claude 코멘터리 ────────────────────────────
@@ -277,42 +627,60 @@ def market_score(indicators: dict) -> tuple:
     fg = indicators.get("fear_greed", {})
     if not fg.get("error"):
         s = fg["score"]
-        if s <= 25:
-            score += 3; reasons.append(f"극도 공포 (F&G {s})")
+        if s <= 20:
+            score += 4; reasons.append(f"극도 공포 (F&G {s})")
+        elif s <= 35:
+            score += 3; reasons.append(f"공포 (F&G {s})")
         elif s <= 45:
-            score += 2; reasons.append(f"공포 구간 (F&G {s})")
-        elif s >= 75:
-            score -= 2; reasons.append(f"극도 탐욕 (F&G {s})")
-        elif s >= 60:
-            score -= 1; reasons.append(f"탐욕 구간 (F&G {s})")
+            score += 1; reasons.append(f"약한 공포 (F&G {s})")
+        elif s >= 80:
+            score -= 3; reasons.append(f"극도 탐욕 (F&G {s})")
+        elif s >= 65:
+            score -= 2; reasons.append(f"탐욕 (F&G {s})")
+        elif s >= 55:
+            score -= 1; reasons.append(f"약한 탐욕 (F&G {s})")
 
     vix = indicators.get("vix", {})
     if not vix.get("error"):
         v = vix["current"]
-        if v >= 30:
-            score += 3; reasons.append(f"VIX 극공포 ({v})")
+        if v >= 40:
+            score += 5; reasons.append(f"VIX {v} 🔥 극공포 — 적극 매수 구간")
+        elif v >= 30:
+            score += 3; reasons.append(f"VIX {v} — 매수 적극 검토")
         elif v >= 20:
-            score += 2; reasons.append(f"VIX 공포 ({v})")
+            score += 2; reasons.append(f"VIX {v} — 매수 기회")
         elif v < 15:
-            score -= 1; reasons.append(f"VIX 낮음 ({v})")
+            score -= 1; reasons.append(f"VIX {v} (과열 주의)")
 
     pc = indicators.get("put_call", {})
     if not pc.get("error"):
         r = pc["current"]
         if r >= 1.0:
-            score += 2; reasons.append(f"Put/Call 극공포 ({r})")
+            score += 2; reasons.append(f"Put/Call {r} (극공포)")
         elif r >= 0.8:
-            score += 1; reasons.append(f"Put/Call 공포 ({r})")
+            score += 1; reasons.append(f"Put/Call {r} (공포)")
         elif r < 0.6:
-            score -= 1; reasons.append(f"Put/Call 탐욕 ({r})")
+            score -= 1; reasons.append(f"Put/Call {r} (탐욕)")
 
     aaii = indicators.get("aaii", {})
     if not aaii.get("error") and aaii.get("bearish") is not None:
         bear = aaii["bearish"]
-        if bear >= 45:
-            score += 2; reasons.append(f"AAII 약세 과반 ({bear:.0f}%) → 역발상 매수 신호")
+        if bear >= 50:
+            score += 3; reasons.append(f"AAII 약세 {bear:.0f}% — 강한 역발상 신호")
+        elif bear >= 40:
+            score += 2; reasons.append(f"AAII 약세 {bear:.0f}% — 매수 신호")
         elif bear >= 35:
             score += 1; reasons.append(f"AAII 약세 우세 ({bear:.0f}%)")
+
+    breadth = indicators.get("breadth", {})
+    if not breadth.get("error"):
+        p200 = breadth.get("pct_above_200", 50)
+        if p200 <= 30:
+            score += 2; reasons.append(f"섹터 {p200}%만 200일선 위 (저점 신호)")
+        elif p200 <= 45:
+            score += 1; reasons.append(f"섹터 {p200}% 200일선 위")
+        elif p200 >= 80:
+            score -= 1; reasons.append(f"섹터 {p200}% 200일선 위 (과열)")
 
     return score, reasons
 
@@ -323,10 +691,13 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
     """종목별 매수/홀딩/매도 판단"""
     df = fetch_stock_data(ticker)
     if df.empty:
-        return {"action": "데이터없음", "emoji": "⚪", "reasons": ["데이터 수집 실패"], "drawdown": 0, "price": 0, "score": 0}
+        return {"action": "데이터없음", "emoji": "⚪", "reasons": ["데이터 수집 실패"],
+                "drawdown": 0, "price": 0, "score": 0, "rsi": None, "w52": None}
 
     dd = calc_drawdown_from_high(df)
     mas = calc_moving_averages(df)
+    rsi = calc_rsi(df)
+    w52 = calc_52w_position(df)
     price = dd.get("current", 0)
     drawdown = dd.get("drawdown_pct", 0)
 
@@ -346,30 +717,35 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
         stock_score -= 1; reasons.append(f"고점 근처 ({drawdown:.1f}%)")
 
     # 2. 이평선 위치
-    above_mas = sum(1 for p in [20, 50, 200] if p in mas and price >= mas[p])
-    below_mas = sum(1 for p in [20, 50, 200] if p in mas and price < mas[p])
+    above_mas = sum(1 for p in MA_PERIODS if p in mas and price >= mas[p])
+    below_mas = sum(1 for p in MA_PERIODS if p in mas and price < mas[p])
 
-    if below_mas >= 3:
-        stock_score += 2; reasons.append("단·중·장기 이평선 전부 하회")
-    elif below_mas == 2:
-        stock_score += 1; reasons.append("주요 이평선 2개 하회")
-    elif above_mas >= 3:
-        stock_score -= 1; reasons.append("이평선 전부 상회 (고점 주의)")
+    if below_mas >= 2:
+        stock_score += 2; reasons.append("50/200일선 모두 하회")
+    elif below_mas == 1:
+        stock_score += 1; reasons.append("주요 이평선 하회")
+    elif above_mas >= 2:
+        stock_score -= 1; reasons.append("50/200일선 모두 상회 (고점 주의)")
 
-    # 3. 시장 환경 가중치 (레버리지 ETF는 민감도 높임)
-    leverage = ticker in ("TQQQ", "UPRO", "SPYM")
+    # 3. RSI 보조 신호 (판단 점수에 반영 안 함 — 표시만)
+    # 4. 시장 환경 가중치 (레버리지 ETF는 민감도 높임)
+    leverage = ticker in ("TQQQ", "UPRO", "SPYM", "SOXL", "QLD", "SSO")
     env_weight = 2 if leverage else 1
     total = stock_score + (mkt_score * env_weight // 3)
 
-    # 4. 최종 판단
-    if total >= 4:
+    # 5. 최종 판단 (적립식 장기투자 기준 — 매도 신호 신중하게)
+    if total >= 5:
+        action, emoji = "📈 적극 매수", "🟢"
+    elif total >= 3:
         action, emoji = "📈 매수", "🟢"
-    elif total >= 2:
+    elif total >= 1:
         action, emoji = "🔍 분할매수 검토", "🟡"
-    elif total <= -2:
-        action, emoji = "📉 매도 고려", "🔴"
-    else:
+    elif total >= -2:
         action, emoji = "⏸ 홀딩", "⚪"
+    elif total >= -4:
+        action, emoji = "💵 현금 비중 확대 검토", "🟠"
+    else:
+        action, emoji = "📉 매도 고려", "🔴"
 
     return {
         "action": action,
@@ -378,6 +754,8 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
         "drawdown": drawdown,
         "price": price,
         "score": total,
+        "rsi": rsi,
+        "w52": w52,
     }
 
 
@@ -387,44 +765,100 @@ def build_report() -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = []
     lines.append(f"<b>📊 투자 판단 브리핑</b>  {now}")
-    lines.append("━" * 30)
+    lines.append("━" * 28)
 
-    # 시장 환경 분석
+    # ── 지표 수집 ──────────────────────────────────────────────────
     indicators = collect_all()
     mkt_score, mkt_reasons = market_score(indicators)
+    risk_score, risk_signals = calc_macro_risk_score(indicators)
+    nzd_rate = indicators.get("nzd", {}).get("usd_to_nzd", 0)
 
-    if mkt_score >= 4:
+    # ── [1] 주요 지표 섹션 ─────────────────────────────────────────
+    lines.append("\n<b>📈 주요 지표</b>")
+
+    fg = indicators.get("fear_greed", {})
+    if not fg.get("error"):
+        trend = ""
+        if fg.get("week_ago"):
+            diff = fg["score"] - fg["week_ago"]
+            trend = f"  {'↑' if diff > 0 else '↓'}{abs(diff):.0f} (1주 전 {fg['week_ago']})"
+        lines.append(f"  공포/탐욕  <b>{fg['score']}</b> {fg.get('rating','')}{trend}")
+
+    vix = indicators.get("vix", {})
+    if not vix.get("error"):
+        chg = f"{'↑' if vix['change'] > 0 else '↓'}{abs(vix['change'])}"
+        lines.append(f"  VIX        <b>{vix['current']}</b> {chg}  |  {vix['level']}")
+
+    aaii = indicators.get("aaii", {})
+    if not aaii.get("error") and aaii.get("bullish") is not None:
+        lines.append(
+            f"  AAII       강세 {aaii['bullish']:.0f}%  중립 {aaii.get('neutral',0):.0f}%  약세 {aaii['bearish']:.0f}%"
+        )
+
+    pc = indicators.get("put_call", {})
+    if not pc.get("error"):
+        lines.append(f"  Put/Call   {pc['current']}  ({pc['level']})")
+
+    breadth = indicators.get("breadth", {})
+    if not breadth.get("error"):
+        lines.append(
+            f"  섹터 MA    50일선 위 {breadth['pct_above_50']}%  |  200일선 위 {breadth['pct_above_200']}%"
+        )
+
+    fed = indicators.get("fed_rate", {})
+    if not fed.get("error") and fed.get("value"):
+        lines.append(f"  기준금리   {fed['value']}%")
+
+    # ── 거시 경고 지표 ────────────────────────────────────────────
+    buffett = indicators.get("buffett", {})
+    spread = indicators.get("credit_spread", {})
+    yc = indicators.get("yield_curve", {})
+
+    macro_lines = []
+    if not buffett.get("error"):
+        macro_lines.append(f"  버핏지수    <b>{buffett['value']:.0f}%</b>  {buffett['level']}")
+    if not spread.get("error"):
+        macro_lines.append(f"  신용 스프레드  {spread['value']}%  {spread['level']}")
+    if not yc.get("error"):
+        macro_lines.append(f"  장단기 금리차  {yc['value']:+.2f}%  {yc['level']}")
+
+    if macro_lines:
+        lines.append("\n<b>🌍 거시 경고</b>")
+        lines.extend(macro_lines)
+
+    if mkt_score >= 6:
+        mkt_label = "🟢 강한 매수 구간"
+    elif mkt_score >= 3:
         mkt_label = "🟢 매수 우호적"
-    elif mkt_score >= 2:
-        mkt_label = "🟡 중립 (신중 매수)"
-    elif mkt_score <= -2:
-        mkt_label = "🔴 리스크 높음"
-    else:
+    elif mkt_score >= 1:
+        mkt_label = "🟡 중립 (분할 매수 검토)"
+    elif mkt_score >= -2:
         mkt_label = "⚪ 중립"
+    elif mkt_score >= -4:
+        mkt_label = "🟠 주의 (현금 비중 확대)"
+    else:
+        mkt_label = "🔴 위험 (방어적 포지션)"
 
-    lines.append(f"\n<b>시장 환경: {mkt_label}</b>")
-    if mkt_reasons:
-        lines.append("  " + " · ".join(mkt_reasons))
+    lines.append(f"\n  종합: <b>{mkt_label}</b>  (점수 {mkt_score:+d})")
 
-    # 주요 뉴스 + 투자 대응
+    # ── Claude 섹션 (뉴스 해설 + 포트폴리오 점검) ─────────────────
     news_items = fetch_market_news()
     commentary = generate_news_commentary(news_items, mkt_score, mkt_reasons)
     if commentary:
-        lines.append("")
+        lines.append("\n" + "━" * 28)
         lines.append(commentary)
-        lines.append("━" * 15)
 
-    # 적립 포트폴리오 점검 + 편입/퇴출 추천
     accum_report = generate_accumulation_report(mkt_score, news_items)
     if accum_report:
-        lines.append("")
+        lines.append("\n" + "━" * 28)
         lines.append(accum_report)
-        lines.append("━" * 15)
 
-    # 종목별 판단
-    lines.append(f"\n<b>종목별 판단</b>")
+    # ── [2] 종목별 판단 섹션 ──────────────────────────────────────
+    lines.append("\n" + "━" * 28)
+    lines.append("<b>🏦 종목별 판단</b>")
 
-    buy_list, hold_list, sell_list = [], [], []
+    buy_list, hold_list, cash_list, sell_list = [], [], [], []
+    extreme_overheat_list = []
 
     for ticker in PORTFOLIO:
         result = judge_ticker(ticker, mkt_score)
@@ -433,37 +867,126 @@ def build_report() -> str:
         price = result["price"]
         drawdown = result["drawdown"]
         reasons = result["reasons"]
+        rsi = result.get("rsi")
+        w52 = result.get("w52")
 
-        line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%)  → {action}"
+        rsi_tag = ""
+        if rsi is not None:
+            if rsi >= 70:
+                rsi_tag = f"  RSI {rsi}🔴"
+            elif rsi <= 30:
+                rsi_tag = f"  RSI {rsi}🟢"
+            else:
+                rsi_tag = f"  RSI {rsi}"
+
+        w52_tag = f"  52주 {w52['pos_pct']:.0f}%" if w52 else ""
+
+        line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{w52_tag}"
+        line += f"\n   → {action}"
         if reasons:
-            line += f"\n   <i>{' · '.join(reasons)}</i>"
+            line += f"  <i>{' · '.join(reasons[:2])}</i>"
 
-        if "매수" in action:
+        # 극단 과열 감지 (위험점수 7+ 상황에서만 표시)
+        if risk_score >= 7 and ticker in _config.HOLDINGS and _config.HOLDINGS[ticker] > 0.01:
+            eo = check_extreme_overheated(result)
+            if eo:
+                extreme_overheat_list.append(
+                    f"{eo['emoji']} <b>{ticker}</b>  ${price:.2f}{rsi_tag}{w52_tag}"
+                    f"\n   <i>{eo['reason']}</i>"
+                )
+
+        if "적극 매수" in action or ("매수" in action and "현금" not in action):
             buy_list.append(line)
+        elif "현금" in action:
+            cash_list.append(line)
         elif "매도" in action:
             sell_list.append(line)
         else:
             hold_list.append(line)
 
     if buy_list:
-        lines.append("\n🟢 <b>매수 대상</b>")
+        lines.append("\n🟢 <b>매수 기회</b>")
         lines.extend(buy_list)
-    if sell_list:
-        lines.append("\n🔴 <b>매도 검토</b>")
-        lines.extend(sell_list)
     if hold_list:
         lines.append("\n⚪ <b>홀딩</b>")
         lines.extend(hold_list)
+    if cash_list:
+        lines.append("\n🟠 <b>현금 비중 확대 검토</b>")
+        lines.extend(cash_list)
+    if sell_list:
+        lines.append("\n🔴 <b>매도 고려</b>")
+        lines.extend(sell_list)
 
-    lines.append("\n" + "━" * 15)
-    lines.append("🤖 <i>Stock Agent — 매일 08:00 자동 발송</i>")
+    # ── 극단 과열 경보 (위험점수 7+ 일 때만) ─────────────────────
+    if extreme_overheat_list:
+        lines.append("\n" + "━" * 28)
+        lines.append(
+            "<b>⚠️ 극단 과열 경보</b>  "
+            f"<i>(위험점수 {risk_score} — 일부 차익 검토 가능)</i>"
+        )
+        lines.extend(extreme_overheat_list)
+
+    # ── [3] 현금 비중 + 위험점수 섹션 ────────────────────────────
+    cash_section, available_cash = build_cash_section(
+        _config.HOLDINGS, _config.IDLE_CASH_USD,
+        _config.TARGET_CASH_RATIO, _config.CASH_TICKERS,
+        risk_score=risk_score, risk_signals=risk_signals,
+    )
+    if cash_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(cash_section)
+
+    # ── [4] 레버리지 매수 가이드 ─────────────────────────────────
+    lev_section = build_leverage_guide(available_cash)
+    if lev_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(lev_section)
+
+    # ── [5] 예상 배당 섹션 ────────────────────────────────────────
+    div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)
+    if div_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(div_section)
+
+    lines.append("\n" + "━" * 28)
+    lines.append("🤖 <i>Stock Agent — 평일 미국 장 오픈 후 30분 자동 발송 (DST 자동 반영)</i>")
 
     return "\n".join(lines)
 
 
 # ── 실행 ─────────────────────────────────────────────────────────
 
+def should_skip_run() -> tuple[bool, str]:
+    """
+    미국 동부 시간 기준 장 오픈 후 30분(10:00 ET ± 30분) 시점인지 확인.
+    DST(EDT/EST)를 자동 처리.
+    GitHub Actions에서 cron 두 개(14 UTC, 15 UTC)를 등록하므로
+    그 중 하나만 실제 발송하기 위한 게이트.
+    """
+    if os.getenv("FORCE_SEND") == "1":
+        return False, "FORCE_SEND=1 (수동 실행)"
+
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:
+        return True, f"주말 ({now_et:%a %H:%M ET})"
+
+    target_min = 10 * 60  # 10:00 ET
+    current_min = now_et.hour * 60 + now_et.minute
+    diff = current_min - target_min
+    if abs(diff) > 30:
+        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±30분)"
+
+    return False, f"발송 시간 맞음 ({now_et:%H:%M ET})"
+
+
 def run_once(test_mode: bool = False):
+    if not test_mode:
+        skip, reason = should_skip_run()
+        if skip:
+            print(f"[{datetime.now():%H:%M:%S}] 스킵: {reason}")
+            return
+        print(f"[{datetime.now():%H:%M:%S}] {reason}")
+
     print(f"[{datetime.now():%H:%M:%S}] 보고서 생성 중...")
     report = build_report()
     if test_mode:

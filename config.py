@@ -14,3 +14,30 @@ class Config:
         "COPX,SOXQ,SOXX,SOXL,QLD,SSO,TQQQ,UPRO,"
         "SLV,GLDM,ARKK,SGOV,CRCL",
     ).replace(" ", "").split(",")
+
+    # ── 실제 보유 주수 (포트폴리오 변경 시 업데이트) ──────────────
+    # 2026-05-07 기준
+    HOLDINGS: dict[str, float] = {
+        "QQQI":  600,
+        "SPYI":  600,
+        "SGOV":  110.24,
+        "ETN":   0.1,
+        "MU":    0.038,
+        "VRT":   0.061,
+        "AEHR":  0.22,
+        "GEV":   0.0186,
+        "SOXL":  0.1001,
+        "UPRO":  0.1001,
+        "QLD":   0.1001,
+        "TQQQ":  0.1001,
+        "SSO":   0.1001,
+        "QQQM":  0.02,
+        "SOXQ":  0.01,
+        "SPYM":  0.01,
+        "SCHD":  0.02,
+    }
+
+    # ── 현금 관리 ─────────────────────────────────────────────────
+    TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.20"))  # 20%
+    CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
+    IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "612.19"))  # 미사용 USD 잔고
