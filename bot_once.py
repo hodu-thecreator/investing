@@ -21,6 +21,7 @@ from market_indicators import collect_all
 from blog_ideas import generate_blog_ideas
 from config import Config
 import transactions
+import yfinance as yf
 
 _config = Config()
 
@@ -257,6 +258,29 @@ def handle_buy(chat_id: int, arg: str):
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
 
+def _five_day_return(ticker: str) -> float | None:
+    """최근 5거래일 수익률(%). 실패 시 None."""
+    try:
+        df = yf.Ticker(ticker).history(period="10d")
+        if df is None or df.empty or len(df) < 2:
+            return None
+        close = df["Close"].squeeze()
+        cur = float(close.iloc[-1])
+        prev = float(close.iloc[max(0, len(close) - 6)])
+        return (cur - prev) / prev * 100
+    except Exception:
+        return None
+
+
+def _do_sell(chat_id: int, p: dict):
+    rec = transactions.add_sell(p["ticker"], p["qty"], p["price"], p["date"])
+    send_message(
+        f"✅ 매도 기록\n<b>{rec['ticker']}</b>  {rec['qty']}주 @ ${rec['price']:.2f}\n"
+        f"  {rec['date']}  ·  총 ${rec['qty']*rec['price']:.2f}",
+        chat_id=str(chat_id),
+    )
+
+
 def handle_sell(chat_id: int, arg: str):
     try:
         p = _parse_trade(arg)
@@ -266,12 +290,34 @@ def handle_sell(chat_id: int, arg: str):
                 chat_id=str(chat_id),
             )
             return
-        rec = transactions.add_sell(p["ticker"], p["qty"], p["price"], p["date"])
-        send_message(
-            f"✅ 매도 기록\n<b>{rec['ticker']}</b>  {rec['qty']}주 @ ${rec['price']:.2f}\n"
-            f"  {rec['date']}  ·  총 ${rec['qty']*rec['price']:.2f}",
-            chat_id=str(chat_id),
-        )
+        pct = _five_day_return(p["ticker"])
+        if pct is not None and pct <= -10:
+            send_message(
+                f"⚠️ <b>패닉 매도 경고</b>\n"
+                f"<b>{p['ticker']}</b> 최근 5일 <b>{pct:+.1f}%</b> 하락 중\n\n"
+                f"S&amp;P500 기준 -10% 이상 하락 후 1년 내 회복 확률: 역사적으로 95%+\n"
+                f"지금 파는 건 바닥에서 팔고 반등 놓치는 전형적 패턴입니다.\n\n"
+                f"👉 그래도 매도하려면: <code>/sell_yes {arg}</code>\n"
+                f"👉 취소: 아무것도 안 하면 됩니다",
+                chat_id=str(chat_id),
+            )
+            return
+        _do_sell(chat_id, p)
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_sell_yes(chat_id: int, arg: str):
+    """패닉 가드 경고 무시하고 강제 매도."""
+    try:
+        p = _parse_trade(arg)
+        if not p:
+            send_message(
+                "사용법: <code>/sell_yes TICKER QTY PRICE</code>",
+                chat_id=str(chat_id),
+            )
+            return
+        _do_sell(chat_id, p)
     except Exception as e:
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
@@ -324,7 +370,8 @@ def handle_help(chat_id: int):
         "/check TICKER — 특정 종목 즉시 분석\n\n"
         "<b>💼 거래 기록</b>\n"
         "/buy TICKER QTY PRICE — 매수 기록 (예: /buy QQQM 1 220.50)\n"
-        "/sell TICKER QTY PRICE — 매도 기록\n"
+        "/sell TICKER QTY PRICE — 매도 기록 (급락 시 경고)\n"
+        "/sell_yes TICKER QTY PRICE — 경고 무시 강제 매도\n"
         "/portfolio — 보유 종목 평균단가 + 손익\n"
         "/history [N] — 최근 거래 내역 (기본 10건)\n"
         "/undo — 마지막 거래 기록 취소\n"
@@ -382,6 +429,8 @@ def dispatch(message: dict, state: dict):
         handle_portfolio(chat_id)
     elif cmd == "/history":
         handle_history(chat_id, arg)
+    elif cmd == "/sell_yes":
+        handle_sell_yes(chat_id, arg)
     elif cmd == "/undo":
         handle_undo(chat_id)
     elif cmd == "/rebalance":
