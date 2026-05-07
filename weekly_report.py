@@ -20,6 +20,7 @@ from market_indicators import collect_all
 from telegram_notifier import send_message
 from events import collect_events
 from transactions import _load as _load_transactions
+from rebalancing import build_rebalance_section
 
 _config = Config()
 
@@ -146,6 +147,15 @@ def build_weekly_report() -> str:
         if trades["sells"] > 0:
             emoji = "🟢" if trades["realized"] >= 0 else "🔴"
             lines.append(f"  실현 손익  {emoji} <b>${trades['realized']:+,.2f}</b>")
+
+    # ── 리밸런싱 점검 ──────────────────────────────────────────────
+    try:
+        rebal = build_rebalance_section()
+        if rebal:
+            lines.append("\n" + "━" * 28)
+            lines.append(rebal)
+    except Exception as e:
+        print(f"[weekly] rebalance 오류: {e}")
 
     # ── 다음주 이벤트 5일 미리보기 ────────────────────────────────
     upcoming = collect_events(_config.HOLDINGS, days_ahead=5)
