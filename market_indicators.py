@@ -204,6 +204,51 @@ def get_nzd_rate() -> dict:
     return {"error": "환율 조회 실패"}
 
 
+# ── USD/KRW 환율 ─────────────────────────────────────────────────
+
+def get_usd_krw() -> dict:
+    """USD → KRW 환율 + 1주일 변동률"""
+    try:
+        r = requests.get(
+            "https://api.frankfurter.app/latest?from=USD&to=KRW", timeout=8
+        )
+        r.raise_for_status()
+        current = float(r.json()["rates"]["KRW"])
+        # 1주일 전 환율
+        from datetime import datetime, timedelta
+        wago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+        try:
+            r2 = requests.get(
+                f"https://api.frankfurter.app/{wago}?from=USD&to=KRW", timeout=8
+            )
+            r2.raise_for_status()
+            week_ago = float(r2.json()["rates"]["KRW"])
+            change_pct = (current - week_ago) / week_ago * 100
+        except Exception:
+            week_ago, change_pct = None, None
+        return {
+            "usd_to_krw": round(current, 2),
+            "week_ago": round(week_ago, 2) if week_ago else None,
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
+        }
+    except Exception:
+        pass
+    try:
+        df = yf.Ticker("USDKRW=X").history(period="10d")
+        if df is not None and not df.empty:
+            current = float(df["Close"].iloc[-1])
+            week_ago = float(df["Close"].iloc[0]) if len(df) >= 5 else None
+            change_pct = (current - week_ago) / week_ago * 100 if week_ago else None
+            return {
+                "usd_to_krw": round(current, 2),
+                "week_ago": round(week_ago, 2) if week_ago else None,
+                "change_pct": round(change_pct, 2) if change_pct is not None else None,
+            }
+    except Exception:
+        pass
+    return {"error": "USD/KRW 환율 조회 실패"}
+
+
 # ── FRED 경제지표 ─────────────────────────────────────────────────
 
 def _fred_latest(series_id: str, label: str) -> dict:
@@ -341,6 +386,7 @@ def collect_all() -> dict:
         "aaii": get_aaii_sentiment(),
         "breadth": get_market_breadth(),
         "nzd": get_nzd_rate(),
+        "usd_krw": get_usd_krw(),
         "fed_rate": get_fed_rate(),
         "consumer_sentiment": get_consumer_sentiment(),
         "buffett": get_buffett_indicator(),
