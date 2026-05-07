@@ -1,0 +1,41 @@
+name: Weekly Closing Report
+
+on:
+  schedule:
+    # 매주 토요일 00:00 UTC = 한국 토요일 오전 9시
+    # (미국 금요일 장 마감 후 충분한 여유)
+    - cron: "0 0 * * 6"
+  workflow_dispatch:
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore transactions log
+        uses: actions/cache@v4
+        with:
+          path: .transactions.json
+          key: transactions-${{ github.run_id }}
+          restore-keys: |
+            transactions-
+
+      - name: Run weekly report
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          WATCH_STOCKS: ${{ secrets.WATCH_STOCKS }}
+          FORCE_WEEKLY: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: python weekly_report.py

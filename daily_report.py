@@ -23,6 +23,7 @@ from telegram_notifier import send_message
 from config import Config
 from dca_calculator import build_dca_section
 from events import build_calendar_section
+from news_headlines import build_news_section
 
 _config = Config()
 
@@ -811,6 +812,14 @@ def build_report() -> str:
     if not fed.get("error") and fed.get("value"):
         lines.append(f"  기준금리   {fed['value']}%")
 
+    krw = indicators.get("usd_krw", {})
+    if not krw.get("error") and krw.get("usd_to_krw"):
+        chg = ""
+        if krw.get("change_pct") is not None:
+            arrow = "↑" if krw["change_pct"] > 0 else "↓"
+            chg = f"  {arrow}{abs(krw['change_pct']):.2f}% (1주 전 ₩{krw['week_ago']:,.0f})"
+        lines.append(f"  USD/KRW    <b>₩{krw['usd_to_krw']:,.2f}</b>{chg}")
+
     # ── 거시 경고 지표 ────────────────────────────────────────────
     buffett = indicators.get("buffett", {})
     spread = indicators.get("credit_spread", {})
@@ -968,7 +977,13 @@ def build_report() -> str:
         lines.append("\n" + "━" * 28)
         lines.append(cal_section)
 
-    # ── [7] 예상 배당 섹션 ────────────────────────────────────────
+    # ── [7] 보유 종목 뉴스 헤드라인 ───────────────────────────────
+    news_section = build_news_section(_config.HOLDINGS, top_n=3, max_age_hours=48)
+    if news_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(news_section)
+
+    # ── [8] 예상 배당 섹션 ────────────────────────────────────────
     div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)
     if div_section:
         lines.append("\n" + "━" * 28)
