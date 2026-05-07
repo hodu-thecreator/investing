@@ -30,7 +30,7 @@ _watch = os.getenv("WATCH_STOCKS", "")
 PORTFOLIO = [t.strip() for t in _watch.split(",") if t.strip()] or \
             ["QQQI","SPYI","ETN","MU","VRT","AEHR","GEV",
              "SOXL","UPRO","QLD","TQQQ","SSO","QQQM","SOXQ","SPYM","SCHD"]
-MA_PERIODS = [20, 50, 200]
+MA_PERIODS = [50, 200]
 
 
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
@@ -87,6 +87,39 @@ def calc_52w_position(df: pd.DataFrame) -> dict | None:
     current = float(close.iloc[-1])
     pos = (current - low52) / (high52 - low52) * 100 if high52 != low52 else 50
     return {"low": low52, "high": high52, "pos_pct": round(pos, 1)}
+
+
+def build_dividend_section(holdings: dict[str, float]) -> str:
+    """보유 주수 기반 이번 달 예상 배당금 계산"""
+    rows = []
+    total_annual = 0.0
+
+    tickers_with_holdings = [(t, s) for t, s in holdings.items() if s > 0.01]
+
+    for ticker, shares in tickers_with_holdings:
+        try:
+            info = yf.Ticker(ticker).info
+            price = info.get("regularMarketPrice") or info.get("previousClose", 0)
+            div_yield = info.get("dividendYield") or 0  # 연간 배당수익률 (소수)
+            if div_yield and price and shares:
+                annual = price * shares * div_yield
+                total_annual += annual
+                freq = info.get("dividendRate", 0)
+                monthly = annual / 12
+                if monthly >= 0.5:
+                    rows.append((ticker, monthly, div_yield * 100))
+        except Exception:
+            pass
+
+    if not rows:
+        return ""
+
+    rows.sort(key=lambda x: x[1], reverse=True)
+    lines = ["<b>💰 이번 달 예상 배당</b>"]
+    for ticker, monthly, yld in rows:
+        lines.append(f"  {ticker}  ${monthly:.1f}  ({yld:.1f}%/yr)")
+    lines.append(f"  <b>합계: ${total_annual / 12:.0f}/월  (연 ${total_annual:.0f})</b>")
+    return "\n".join(lines)
 
 
 # ── 시장 뉴스 수집 + Claude 코멘터리 ────────────────────────────
@@ -501,6 +534,12 @@ def build_report() -> str:
     if hold_list:
         lines.append("\n⚪ <b>홀딩</b>")
         lines.extend(hold_list)
+
+    # 월 배당 예상
+    div_section = build_dividend_section(_config.HOLDINGS)
+    if div_section:
+        lines.append("\n" + "━" * 15)
+        lines.append(div_section)
 
     lines.append("\n" + "━" * 15)
     lines.append("🤖 <i>Stock Agent — 매일 08:00 자동 발송</i>")
