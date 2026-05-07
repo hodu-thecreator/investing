@@ -89,6 +89,96 @@ def calc_52w_position(df: pd.DataFrame) -> dict | None:
     return {"low": low52, "high": high52, "pos_pct": round(pos, 1)}
 
 
+def check_profit_taking(ticker_data: dict, indicators: dict) -> dict | None:
+    """
+    3단계 익절 신호.
+    - tier 1 (10%): 종목 단독 과열 — RSI 75+ AND 52주 95%+
+    - tier 2 (25%): 위 + 시장 과열 (F&G 80+ 또는 AAII 강세 60%+)
+    - tier 3 (50%): 위 + 추세 반전 (VIX 급등 또는 섹터 200일선 위 35% 이하)
+    """
+    rsi = ticker_data.get("rsi")
+    w52 = ticker_data.get("w52")
+    if rsi is None or not w52:
+        return None
+
+    overheated = rsi >= 75 and w52["pos_pct"] >= 95
+    if not overheated:
+        return None
+
+    fg_score = indicators.get("fear_greed", {}).get("score", 50)
+    aaii_bull = indicators.get("aaii", {}).get("bullish") or 0
+    market_overheated = fg_score >= 80 or aaii_bull >= 60
+
+    vix = indicators.get("vix", {})
+    vix_curr = vix.get("current", 0) or 0
+    vix_chg = vix.get("change", 0) or 0
+    breadth = indicators.get("breadth", {})
+    p200 = breadth.get("pct_above_200", 50) or 50
+    trend_break = (vix_curr >= 25 and vix_chg >= 3) or p200 <= 35
+
+    if trend_break and market_overheated:
+        return {
+            "tier": 3, "pct": 50, "emoji": "🔴",
+            "label": "적극 익절 50%",
+            "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% · 시장 과열 + 추세 반전",
+        }
+    if market_overheated:
+        return {
+            "tier": 2, "pct": 25, "emoji": "🟠",
+            "label": "중간 익절 25%",
+            "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% · 시장 과열",
+        }
+    return {
+        "tier": 1, "pct": 10, "emoji": "🟡",
+        "label": "소액 익절 10%",
+        "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% (종목 과열)",
+    }
+
+
+def build_cash_section(holdings: dict[str, float], idle_cash: float,
+                       target_ratio: float, cash_tickers: list[str]) -> str:
+    """현재 현금 비중 vs 목표 비중 추적"""
+    cash_value = idle_cash
+    total_value = idle_cash
+
+    for ticker, shares in holdings.items():
+        if shares <= 0:
+            continue
+        try:
+            df = fetch_stock_data(ticker, period="5d")
+            if df.empty:
+                continue
+            price = float(df["Close"].squeeze().iloc[-1])
+            value = price * shares
+            total_value += value
+            if ticker in cash_tickers:
+                cash_value += value
+        except Exception:
+            continue
+
+    if total_value <= 0:
+        return ""
+
+    ratio = cash_value / total_value
+    target_value = total_value * target_ratio
+    diff_pct = (ratio - target_ratio) * 100
+    diff_usd = cash_value - target_value
+
+    if abs(diff_pct) < 1.5:
+        status = "✅ 목표 달성"
+    elif diff_pct > 0:
+        status = f"💰 목표 +{diff_pct:.1f}%p (여유 ${diff_usd:.0f})"
+    else:
+        status = f"⚠️ 목표 {diff_pct:.1f}%p 부족 (보충 권장 ${-diff_usd:.0f})"
+
+    lines = ["<b>💵 현금 비중</b>"]
+    lines.append(f"  현재  <b>${cash_value:,.0f}</b>  ({ratio*100:.1f}%)")
+    lines.append(f"  목표  ${target_value:,.0f}  ({target_ratio*100:.0f}%)")
+    lines.append(f"  총자산 ${total_value:,.0f}")
+    lines.append(f"  {status}")
+    return "\n".join(lines)
+
+
 def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> str:
     """보유 주수 기반 이번 달 예상 배당금 계산"""
     rows = []
@@ -520,6 +610,23 @@ def build_report() -> str:
     if not fed.get("error") and fed.get("value"):
         lines.append(f"  기준금리   {fed['value']}%")
 
+    # ── 거시 경고 지표 ────────────────────────────────────────────
+    buffett = indicators.get("buffett", {})
+    spread = indicators.get("credit_spread", {})
+    yc = indicators.get("yield_curve", {})
+
+    macro_lines = []
+    if not buffett.get("error"):
+        macro_lines.append(f"  버핏지수    <b>{buffett['value']:.0f}%</b>  {buffett['level']}")
+    if not spread.get("error"):
+        macro_lines.append(f"  신용 스프레드  {spread['value']}%  {spread['level']}")
+    if not yc.get("error"):
+        macro_lines.append(f"  장단기 금리차  {yc['value']:+.2f}%  {yc['level']}")
+
+    if macro_lines:
+        lines.append("\n<b>🌍 거시 경고</b>")
+        lines.extend(macro_lines)
+
     if mkt_score >= 6:
         mkt_label = "🟢 강한 매수 구간"
     elif mkt_score >= 3:
@@ -552,6 +659,7 @@ def build_report() -> str:
     lines.append("<b>🏦 종목별 판단</b>")
 
     buy_list, hold_list, cash_list, sell_list = [], [], [], []
+    profit_take_list = []
 
     for ticker in PORTFOLIO:
         result = judge_ticker(ticker, mkt_score)
@@ -579,6 +687,16 @@ def build_report() -> str:
         if reasons:
             line += f"  |  <i>{' · '.join(reasons)}</i>"
 
+        # 익절 신호 (보유 중 + 과열 종목만)
+        if ticker in _config.HOLDINGS and _config.HOLDINGS[ticker] > 0.01:
+            pt = check_profit_taking(result, indicators)
+            if pt:
+                pt_line = (
+                    f"{pt['emoji']} <b>{ticker}</b>  ${price:.2f}{rsi_tag}{w52_tag}"
+                    f"\n   → <b>{pt['label']}</b>  |  <i>{pt['reason']}</i>"
+                )
+                profit_take_list.append((pt["tier"], pt_line))
+
         if "적극 매수" in action or ("매수" in action and "현금" not in action):
             buy_list.append(line)
         elif "현금" in action:
@@ -601,7 +719,24 @@ def build_report() -> str:
         lines.append("\n🔴 <b>매도 고려</b>")
         lines.extend(sell_list)
 
-    # ── [3] 예상 배당 섹션 ────────────────────────────────────────
+    # ── 익절 신호 (별도 섹션) ─────────────────────────────────────
+    if profit_take_list:
+        profit_take_list.sort(key=lambda x: -x[0])  # tier 3 먼저
+        lines.append("\n" + "━" * 28)
+        lines.append("<b>💎 익절 신호</b>  <i>(보유 종목 단계별 차익실현 권고)</i>")
+        for _, pt_line in profit_take_list:
+            lines.append(pt_line)
+
+    # ── [3] 현금 비중 섹션 ────────────────────────────────────────
+    cash_section = build_cash_section(
+        _config.HOLDINGS, _config.IDLE_CASH_USD,
+        _config.TARGET_CASH_RATIO, _config.CASH_TICKERS,
+    )
+    if cash_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(cash_section)
+
+    # ── [4] 예상 배당 섹션 ────────────────────────────────────────
     div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)
     if div_section:
         lines.append("\n" + "━" * 28)

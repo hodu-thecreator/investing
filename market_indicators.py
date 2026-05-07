@@ -241,6 +241,95 @@ def get_consumer_sentiment() -> dict:
     return _fred_latest("UMCSENT", "소비자심리")
 
 
+# ── 거시 경고 지표 ───────────────────────────────────────────────
+
+def get_buffett_indicator() -> dict:
+    """
+    버핏지수 근사 = Wilshire 5000 / GDP × 100.
+    역사적 평균 ~100%, 200%+ = 거품 구간.
+
+    WILL5000PRFC는 인덱스값이라 정확한 시총이 아니지만,
+    GDP 대비 비율 트렌드를 추적하는 데는 충분합니다.
+    """
+    if not FRED_API_KEY:
+        return {"error": "FRED_API_KEY 미설정"}
+    try:
+        wilshire = _fred_latest("WILL5000PRFC", "Wilshire 5000")
+        gdp = _fred_latest("GDP", "GDP")
+        if wilshire.get("error") or gdp.get("error"):
+            return {"error": "FRED 데이터 없음"}
+
+        # WILL5000PRFC 인덱스 값 ≈ 시총(billion USD).
+        # 2024년말 ~62000 ≈ $62T 시총, GDP ≈ $28T 이라 ratio ~220%
+        market_cap_b = wilshire["value"] * 1.0
+        ratio = market_cap_b / gdp["value"] * 100
+
+        if ratio >= 220:
+            level = "🔥 극단 거품"
+        elif ratio >= 200:
+            level = "⚠️ 거품 구간"
+        elif ratio >= 150:
+            level = "고평가"
+        elif ratio >= 100:
+            level = "공정 가치"
+        else:
+            level = "저평가"
+
+        return {
+            "value": round(ratio, 0),
+            "level": level,
+            "wilshire": round(wilshire["value"], 0),
+            "gdp": round(gdp["value"], 0),
+            "date": wilshire.get("date"),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def get_credit_spread() -> dict:
+    """
+    Moody's BAA 회사채 - 10Y 미국채 스프레드.
+    기관 위험회피 신호. 평소 1.5~2.5%, 3%+ 위험, 4%+ 위기.
+    """
+    result = _fred_latest("BAA10Y", "신용스프레드")
+    if result.get("error"):
+        return result
+    v = result["value"]
+    if v >= 4.0:
+        level = "🔥 위기 수준"
+    elif v >= 3.0:
+        level = "⚠️ 위험 확대"
+    elif v >= 2.5:
+        level = "주의"
+    else:
+        level = "정상"
+    result["level"] = level
+    return result
+
+
+def get_yield_curve() -> dict:
+    """
+    10Y - 2Y 미국채 금리차.
+    음수(역전) = 침체 예고, 정상화(역전 해소) 후 6~12개월이 위험.
+    """
+    result = _fred_latest("T10Y2Y", "장단기금리차")
+    if result.get("error"):
+        return result
+    v = result["value"]
+    prev = result.get("prev")
+    if v < 0:
+        level = "🔻 역전 (침체 예고)"
+    elif v < 0.3:
+        if prev is not None and prev < 0:
+            level = "⚠️ 정상화 직후 (6~12개월 주의)"
+        else:
+            level = "평탄"
+    else:
+        level = "정상"
+    result["level"] = level
+    return result
+
+
 # ── 전체 수집 ────────────────────────────────────────────────────
 
 def collect_all() -> dict:
@@ -254,6 +343,9 @@ def collect_all() -> dict:
         "nzd": get_nzd_rate(),
         "fed_rate": get_fed_rate(),
         "consumer_sentiment": get_consumer_sentiment(),
+        "buffett": get_buffett_indicator(),
+        "credit_spread": get_credit_spread(),
+        "yield_curve": get_yield_curve(),
     }
 
 

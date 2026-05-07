@@ -36,3 +36,8 @@ class Config:
         "SPYM":  0.01,
         "SCHD":  0.02,
     }
+
+    # ── 현금 관리 ─────────────────────────────────────────────────
+    TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.20"))  # 20%
+    CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
+    IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "612.19"))  # 미사용 USD 잔고
