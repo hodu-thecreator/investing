@@ -89,57 +89,106 @@ def calc_52w_position(df: pd.DataFrame) -> dict | None:
     return {"low": low52, "high": high52, "pos_pct": round(pos, 1)}
 
 
-def check_profit_taking(ticker_data: dict, indicators: dict) -> dict | None:
+def calc_macro_risk_score(indicators: dict) -> tuple[int, list[str]]:
     """
-    3단계 익절 신호.
-    - tier 1 (10%): 종목 단독 과열 — RSI 75+ AND 52주 95%+
-    - tier 2 (25%): 위 + 시장 과열 (F&G 80+ 또는 AAII 강세 60%+)
-    - tier 3 (50%): 위 + 추세 반전 (VIX 급등 또는 섹터 200일선 위 35% 이하)
+    거시 위험 점수 (0~10+, 높을수록 위험).
+    현금 비중 목표를 동적으로 조절하는 데 사용.
     """
+    score = 0
+    signals = []
+
+    buffett = indicators.get("buffett", {})
+    if not buffett.get("error") and buffett.get("value"):
+        v = buffett["value"]
+        if v >= 220:
+            score += 3; signals.append(f"버핏지수 {v:.0f}% 극단 거품")
+        elif v >= 200:
+            score += 2; signals.append(f"버핏지수 {v:.0f}% 거품 구간")
+        elif v >= 180:
+            score += 1; signals.append(f"버핏지수 {v:.0f}% 고평가")
+
+    spread = indicators.get("credit_spread", {})
+    if not spread.get("error") and spread.get("value"):
+        v = spread["value"]
+        if v >= 4.0:
+            score += 3; signals.append(f"신용스프레드 {v}% 위기")
+        elif v >= 3.0:
+            score += 2; signals.append(f"신용스프레드 {v}% 위험")
+        elif v >= 2.5:
+            score += 1; signals.append(f"신용스프레드 {v}% 주의")
+
+    yc = indicators.get("yield_curve", {})
+    if not yc.get("error") and yc.get("value") is not None:
+        v = yc["value"]
+        prev = yc.get("prev")
+        if prev is not None and prev < 0 and v >= 0:
+            score += 3; signals.append("금리차 역전 해소 직후 — 6~12개월 주의")
+        elif v < 0:
+            score += 2; signals.append(f"금리차 역전 중 ({v:+.2f}%)")
+
+    fg = indicators.get("fear_greed", {})
+    if not fg.get("error") and fg.get("score"):
+        s = fg["score"]
+        if s >= 80:
+            score += 2; signals.append(f"극도 탐욕 (F&G {s})")
+        elif s >= 70:
+            score += 1; signals.append(f"탐욕 (F&G {s})")
+
+    vix = indicators.get("vix", {})
+    if not vix.get("error") and vix.get("current"):
+        v = vix["current"]
+        if v < 15:
+            score += 1; signals.append(f"VIX {v} 과열 (낮은 변동성)")
+
+    aaii = indicators.get("aaii", {})
+    if not aaii.get("error") and aaii.get("bullish") is not None:
+        bull = aaii["bullish"]
+        if bull >= 60:
+            score += 2; signals.append(f"AAII 강세 {bull:.0f}% 과열")
+        elif bull >= 55:
+            score += 1; signals.append(f"AAII 강세 {bull:.0f}%")
+
+    breadth = indicators.get("breadth", {})
+    if not breadth.get("error") and breadth.get("pct_above_200") is not None:
+        p200 = breadth["pct_above_200"]
+        if p200 >= 85:
+            score += 1; signals.append(f"섹터 {p200}% 200일선 위 과매수")
+
+    return score, signals
+
+
+def calc_cash_target(risk_score: int) -> float:
+    """위험 점수 → 현금 목표 비중"""
+    if risk_score >= 7:
+        return 0.30
+    elif risk_score >= 5:
+        return 0.25
+    elif risk_score >= 3:
+        return 0.22
+    return 0.20
+
+
+def check_extreme_overheated(ticker_data: dict) -> dict | None:
+    """극단 과열 판단 — risk_score 7+ 상황에서만 표시하는 선택적 익절 신호"""
     rsi = ticker_data.get("rsi")
     w52 = ticker_data.get("w52")
     if rsi is None or not w52:
         return None
-
-    overheated = rsi >= 75 and w52["pos_pct"] >= 95
-    if not overheated:
-        return None
-
-    fg_score = indicators.get("fear_greed", {}).get("score", 50)
-    aaii_bull = indicators.get("aaii", {}).get("bullish") or 0
-    market_overheated = fg_score >= 80 or aaii_bull >= 60
-
-    vix = indicators.get("vix", {})
-    vix_curr = vix.get("current", 0) or 0
-    vix_chg = vix.get("change", 0) or 0
-    breadth = indicators.get("breadth", {})
-    p200 = breadth.get("pct_above_200", 50) or 50
-    trend_break = (vix_curr >= 25 and vix_chg >= 3) or p200 <= 35
-
-    if trend_break and market_overheated:
+    if rsi >= 78 and w52["pos_pct"] >= 97:
         return {
-            "tier": 3, "pct": 50, "emoji": "🔴",
-            "label": "적극 익절 50%",
-            "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% · 시장 과열 + 추세 반전",
+            "emoji": "⚠️",
+            "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% — 극단 과열, 부분 차익 고려",
         }
-    if market_overheated:
-        return {
-            "tier": 2, "pct": 25, "emoji": "🟠",
-            "label": "중간 익절 25%",
-            "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% · 시장 과열",
-        }
-    return {
-        "tier": 1, "pct": 10, "emoji": "🟡",
-        "label": "소액 익절 10%",
-        "reason": f"RSI {rsi} · 52주 {w52['pos_pct']:.0f}% (종목 과열)",
-    }
+    return None
 
 
 def build_cash_section(holdings: dict[str, float], idle_cash: float,
-                       target_ratio: float, cash_tickers: list[str]) -> str:
-    """현재 현금 비중 vs 목표 비중 추적"""
+                       base_target_ratio: float, cash_tickers: list[str],
+                       risk_score: int = 0, risk_signals: list[str] = None) -> tuple[str, float]:
+    """현재 현금 비중 vs 목표 비중 추적. (section_text, available_cash) 반환."""
     cash_value = idle_cash
     total_value = idle_cash
+    available_cash = idle_cash  # SGOV + idle
 
     for ticker, shares in holdings.items():
         if shares <= 0:
@@ -153,30 +202,46 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
             total_value += value
             if ticker in cash_tickers:
                 cash_value += value
+                available_cash += value
         except Exception:
             continue
 
     if total_value <= 0:
-        return ""
+        return "", available_cash
 
+    target_ratio = calc_cash_target(risk_score)
     ratio = cash_value / total_value
     target_value = total_value * target_ratio
     diff_pct = (ratio - target_ratio) * 100
     diff_usd = cash_value - target_value
 
-    if abs(diff_pct) < 1.5:
-        status = "✅ 목표 달성"
-    elif diff_pct > 0:
-        status = f"💰 목표 +{diff_pct:.1f}%p (여유 ${diff_usd:.0f})"
+    if risk_score >= 7:
+        target_label = f"🔴 {target_ratio*100:.0f}%  (위험점수 {risk_score} — 방어 모드)"
+    elif risk_score >= 5:
+        target_label = f"🟠 {target_ratio*100:.0f}%  (위험점수 {risk_score} — 주의)"
+    elif risk_score >= 3:
+        target_label = f"🟡 {target_ratio*100:.0f}%  (위험점수 {risk_score} — 소폭 보수)"
     else:
-        status = f"⚠️ 목표 {diff_pct:.1f}%p 부족 (보충 권장 ${-diff_usd:.0f})"
+        target_label = f"🟢 {target_ratio*100:.0f}%  (기본)"
 
     lines = ["<b>💵 현금 비중</b>"]
     lines.append(f"  현재  <b>${cash_value:,.0f}</b>  ({ratio*100:.1f}%)")
-    lines.append(f"  목표  ${target_value:,.0f}  ({target_ratio*100:.0f}%)")
+    lines.append(f"  목표  {target_label}")
     lines.append(f"  총자산 ${total_value:,.0f}")
-    lines.append(f"  {status}")
-    return "\n".join(lines)
+
+    if abs(diff_pct) < 1.5:
+        lines.append("  ✅ 목표 달성")
+    elif diff_pct > 0:
+        lines.append(f"  💰 목표 +{diff_pct:.1f}%p 초과 (여유 ${diff_usd:.0f})")
+    else:
+        needed = -diff_usd
+        lines.append(f"  ⚠️ 목표 {abs(diff_pct):.1f}%p 부족")
+        lines.append(f"  → 신규 적립금 <b>${needed:.0f}</b>를 SGOV에 배분 권장")
+
+    if risk_signals:
+        lines.append(f"  <i>위험 신호: {' · '.join(risk_signals[:3])}</i>")
+
+    return "\n".join(lines), available_cash
 
 
 def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> str:
@@ -213,6 +278,83 @@ def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> s
     lines.append(f"  ─────────────────────")
     lines.append(f"  <b>합계  ${monthly_total:.0f}/월{nzd_str}</b>")
     lines.append(f"  <i>(연 ${total_annual:.0f}{f'  ≈  NZD {total_annual * nzd_rate:.0f}' if nzd_rate else ''})</i>")
+    return "\n".join(lines)
+
+
+# ── 레버리지 매수 가이드 ──────────────────────────────────────────
+
+# 본주 → 레버리지 ETF 매핑 (2x / 3x)
+_LEVERAGE_MAP = {
+    "SPYM": {"2x": "SSO",  "3x": "UPRO", "name": "S&P500"},
+    "QQQM": {"2x": "QLD",  "3x": "TQQQ", "name": "나스닥100"},
+    "SOXQ": {"2x": None,   "3x": "SOXL", "name": "반도체"},
+}
+
+
+def build_leverage_guide(available_cash: float) -> str:
+    """
+    SPYM/QQQM/SOXQ의 60일 고점 대비 낙폭을 추적해
+    2x/3x 레버리지 매수 시점과 권장 금액을 제시.
+
+    포지션 사이징 원칙:
+      -5~-10%  → 2x ETF, 가용현금의 5%
+      -10~-15% → 3x ETF, 가용현금의 10%
+      -15%+    → 3x ETF, 가용현금의 15% (분할 진입 강조)
+    """
+    guide_lines = []
+    any_signal = False
+
+    for base_ticker, lev in _LEVERAGE_MAP.items():
+        try:
+            df = fetch_stock_data(base_ticker, period="3mo")
+            if df.empty:
+                continue
+            close = df["Close"].squeeze()
+            current = float(close.iloc[-1])
+            high_60d = float(close.rolling(min(60, len(close))).max().iloc[-1])
+            dd = (current - high_60d) / high_60d * 100
+
+            name = lev["name"]
+            if dd <= -15:
+                lev_t = lev["3x"]
+                amt = available_cash * 0.15
+                guide_lines.append(
+                    f"🔴 {base_ticker}({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
+                    f"   → <b>{lev_t} 3x 적극 매수</b>  권장금액 <b>${amt:.0f}</b>  (가용현금 15%)\n"
+                    f"   <i>분할 3회 이상, 손절라인 -30% 설정 권장</i>"
+                )
+                any_signal = True
+            elif dd <= -10:
+                lev_t = lev["3x"]
+                amt = available_cash * 0.10
+                guide_lines.append(
+                    f"🟠 {base_ticker}({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
+                    f"   → <b>{lev_t} 3x 매수 검토</b>  권장금액 <b>${amt:.0f}</b>  (가용현금 10%)"
+                )
+                any_signal = True
+            elif dd <= -5:
+                lev_t = lev["2x"]
+                if lev_t:
+                    amt = available_cash * 0.05
+                    guide_lines.append(
+                        f"🟡 {base_ticker}({name}) 고점 대비 <b>{dd:+.1f}%</b>\n"
+                        f"   → <b>{lev_t} 2x 소액 검토</b>  권장금액 <b>${amt:.0f}</b>  (가용현금 5%)"
+                    )
+                    any_signal = True
+            else:
+                guide_lines.append(
+                    f"⚪ {base_ticker}({name}) 고점 대비 {dd:+.1f}%  — 대기 중"
+                )
+        except Exception as e:
+            print(f"[leverage_guide] {base_ticker} 오류: {e}")
+
+    if not guide_lines:
+        return ""
+
+    lines = [f"<b>📐 레버리지 매수 가이드</b>  <i>(가용현금 ${available_cash:,.0f} 기준)</i>"]
+    lines.extend(guide_lines)
+    if any_signal:
+        lines.append("<i>⚡ 레버리지는 반드시 분할 매수, 총 포트폴리오의 20% 이내 유지</i>")
     return "\n".join(lines)
 
 
@@ -519,15 +661,15 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
         stock_score -= 1; reasons.append(f"고점 근처 ({drawdown:.1f}%)")
 
     # 2. 이평선 위치
-    above_mas = sum(1 for p in [20, 50, 200] if p in mas and price >= mas[p])
-    below_mas = sum(1 for p in [20, 50, 200] if p in mas and price < mas[p])
+    above_mas = sum(1 for p in MA_PERIODS if p in mas and price >= mas[p])
+    below_mas = sum(1 for p in MA_PERIODS if p in mas and price < mas[p])
 
-    if below_mas >= 3:
-        stock_score += 2; reasons.append("단·중·장기 이평선 전부 하회")
-    elif below_mas == 2:
-        stock_score += 1; reasons.append("주요 이평선 2개 하회")
-    elif above_mas >= 3:
-        stock_score -= 1; reasons.append("이평선 전부 상회 (고점 주의)")
+    if below_mas >= 2:
+        stock_score += 2; reasons.append("50/200일선 모두 하회")
+    elif below_mas == 1:
+        stock_score += 1; reasons.append("주요 이평선 하회")
+    elif above_mas >= 2:
+        stock_score -= 1; reasons.append("50/200일선 모두 상회 (고점 주의)")
 
     # 3. RSI 보조 신호 (판단 점수에 반영 안 함 — 표시만)
     # 4. 시장 환경 가중치 (레버리지 ETF는 민감도 높임)
@@ -572,6 +714,7 @@ def build_report() -> str:
     # ── 지표 수집 ──────────────────────────────────────────────────
     indicators = collect_all()
     mkt_score, mkt_reasons = market_score(indicators)
+    risk_score, risk_signals = calc_macro_risk_score(indicators)
     nzd_rate = indicators.get("nzd", {}).get("usd_to_nzd", 0)
 
     # ── [1] 주요 지표 섹션 ─────────────────────────────────────────
@@ -659,7 +802,7 @@ def build_report() -> str:
     lines.append("<b>🏦 종목별 판단</b>")
 
     buy_list, hold_list, cash_list, sell_list = [], [], [], []
-    profit_take_list = []
+    extreme_overheat_list = []
 
     for ticker in PORTFOLIO:
         result = judge_ticker(ticker, mkt_score)
@@ -687,15 +830,14 @@ def build_report() -> str:
         if reasons:
             line += f"  |  <i>{' · '.join(reasons)}</i>"
 
-        # 익절 신호 (보유 중 + 과열 종목만)
-        if ticker in _config.HOLDINGS and _config.HOLDINGS[ticker] > 0.01:
-            pt = check_profit_taking(result, indicators)
-            if pt:
-                pt_line = (
-                    f"{pt['emoji']} <b>{ticker}</b>  ${price:.2f}{rsi_tag}{w52_tag}"
-                    f"\n   → <b>{pt['label']}</b>  |  <i>{pt['reason']}</i>"
+        # 극단 과열 감지 (위험점수 7+ 상황에서만 표시)
+        if risk_score >= 7 and ticker in _config.HOLDINGS and _config.HOLDINGS[ticker] > 0.01:
+            eo = check_extreme_overheated(result)
+            if eo:
+                extreme_overheat_list.append(
+                    f"{eo['emoji']} <b>{ticker}</b>  ${price:.2f}{rsi_tag}{w52_tag}"
+                    f"\n   <i>{eo['reason']}</i>"
                 )
-                profit_take_list.append((pt["tier"], pt_line))
 
         if "적극 매수" in action or ("매수" in action and "현금" not in action):
             buy_list.append(line)
@@ -719,24 +861,32 @@ def build_report() -> str:
         lines.append("\n🔴 <b>매도 고려</b>")
         lines.extend(sell_list)
 
-    # ── 익절 신호 (별도 섹션) ─────────────────────────────────────
-    if profit_take_list:
-        profit_take_list.sort(key=lambda x: -x[0])  # tier 3 먼저
+    # ── 극단 과열 경보 (위험점수 7+ 일 때만) ─────────────────────
+    if extreme_overheat_list:
         lines.append("\n" + "━" * 28)
-        lines.append("<b>💎 익절 신호</b>  <i>(보유 종목 단계별 차익실현 권고)</i>")
-        for _, pt_line in profit_take_list:
-            lines.append(pt_line)
+        lines.append(
+            "<b>⚠️ 극단 과열 경보</b>  "
+            f"<i>(위험점수 {risk_score} — 일부 차익 검토 가능)</i>"
+        )
+        lines.extend(extreme_overheat_list)
 
-    # ── [3] 현금 비중 섹션 ────────────────────────────────────────
-    cash_section = build_cash_section(
+    # ── [3] 현금 비중 + 위험점수 섹션 ────────────────────────────
+    cash_section, available_cash = build_cash_section(
         _config.HOLDINGS, _config.IDLE_CASH_USD,
         _config.TARGET_CASH_RATIO, _config.CASH_TICKERS,
+        risk_score=risk_score, risk_signals=risk_signals,
     )
     if cash_section:
         lines.append("\n" + "━" * 28)
         lines.append(cash_section)
 
-    # ── [4] 예상 배당 섹션 ────────────────────────────────────────
+    # ── [4] 레버리지 매수 가이드 ─────────────────────────────────
+    lev_section = build_leverage_guide(available_cash)
+    if lev_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(lev_section)
+
+    # ── [5] 예상 배당 섹션 ────────────────────────────────────────
     div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)
     if div_section:
         lines.append("\n" + "━" * 28)
