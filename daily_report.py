@@ -948,7 +948,7 @@ def build_report() -> str:
         lines.append(div_section)
 
     lines.append("\n" + "━" * 28)
-    lines.append("🤖 <i>Stock Agent — 평일 장 오픈 전 (08:30 ET) 자동 발송</i>")
+    lines.append("🤖 <i>Stock Agent — 평일 22:00 KST (장 오픈 30분 전) 자동 발송</i>")
 
     return "\n".join(lines)
 

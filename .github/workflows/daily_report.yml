@@ -2,8 +2,8 @@ name: Daily Investment Report
 
 on:
   schedule:
-    # 미국 장 오픈 30분 전 — 8:30am EDT (UTC-4) = 12:30 UTC
-    - cron: "30 12 * * 1-5"
+    # 미국 장 오픈 30분 전 — 한국 22:00 KST = 13:00 UTC (서머타임 EDT 기준)
+    - cron: "0 13 * * 1-5"
   workflow_dispatch:  # 수동 실행 버튼
 
 jobs:
