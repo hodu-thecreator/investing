@@ -1,0 +1,32 @@
+name: Morning Recap
+
+on:
+  schedule:
+    # 매일 23:00 UTC = 한국시간 다음날 08:00 KST
+    # Mon-Fri 23 UTC = Tue-Sat 08:00 KST (미국 화~금 + 토 아침)
+    - cron: "0 23 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  recap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run morning recap
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          WATCH_STOCKS: ${{ secrets.WATCH_STOCKS }}
+          FORCE_MORNING: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+        run: python morning_recap.py
