@@ -13,7 +13,7 @@ import yfinance as yf
 
 from config import Config
 from telegram_notifier import send_message
-from market_indicators import get_vix, get_usd_krw
+from market_indicators import get_vix, get_usd_krw, get_nzd_rate
 from events import collect_events
 
 _config = Config()
@@ -89,15 +89,22 @@ def build_morning_recap() -> str:
                 f"<b>{sign}{d['change_pct']:.2f}%</b>"
             )
 
-    # ── USD/KRW 환율 ──────────────────────────────────────────────
+    # ── 환율 ──────────────────────────────────────────────────────
     krw = get_usd_krw()
-    if not krw.get("error") and krw.get("usd_to_krw"):
+    nzd = get_nzd_rate()
+    has_krw = not krw.get("error") and krw.get("usd_to_krw")
+    has_nzd = not nzd.get("error") and nzd.get("usd_to_nzd")
+    if has_krw or has_nzd:
+        lines.append("")
+        lines.append("<b>💱 환율</b>")
+    if has_krw:
         chg = ""
         if krw.get("change_pct") is not None:
             arrow = "↑" if krw["change_pct"] > 0 else "↓"
             chg = f"  {arrow}{abs(krw['change_pct']):.2f}% (1주)"
-        lines.append("")
-        lines.append(f"<b>💱 USD/KRW</b>  ₩{krw['usd_to_krw']:,.2f}{chg}")
+        lines.append(f"  USD/KRW  ₩{krw['usd_to_krw']:,.2f}{chg}")
+    if has_nzd:
+        lines.append(f"  USD/NZD  NZ${nzd['usd_to_nzd']:.4f}")
 
     # ── 오늘 일정 (24시간 이내) ──────────────────────────────────
     upcoming = collect_events(_config.HOLDINGS, days_ahead=1)
