@@ -47,16 +47,12 @@ def build_morning_recap() -> str:
     lines = [f"<b>🌅 미국 장 마감 요약</b>  {today} 아침"]
     lines.append("━" * 28)
 
-    # ── IBKR 계좌 현황 ───────────────────────────────────────────
-    ibkr = ibkr_flex.get_account_data()
-    if not ibkr["error"] and ibkr["positions"]:
-        acct_section = ibkr_flex.build_account_section(ibkr["positions"], ibkr["cash_usd"])
+    _holdings, _, _ibkr = ibkr_flex.resolve_holdings_and_cash(_config)
+    if _ibkr["error"] is None and _ibkr["positions"]:
+        acct_section = ibkr_flex.build_account_section(_ibkr["positions"], _ibkr["cash_usd"])
         if acct_section:
             lines.append("")
             lines.append(acct_section)
-
-    # 모버 계산에 사용할 보유 종목 (IBKR 우선, 없으면 config)
-    _holdings = ibkr["holdings"] if not ibkr["error"] and ibkr["holdings"] else _config.HOLDINGS
 
     # ── 주요 지수 ────────────────────────────────────────────────
     lines.append("")
@@ -119,7 +115,7 @@ def build_morning_recap() -> str:
         lines.append(f"  USD/NZD  NZ${nzd['usd_to_nzd']:.4f}")
 
     # ── 오늘 일정 (24시간 이내) ──────────────────────────────────
-    upcoming = collect_events(_config.HOLDINGS, days_ahead=1)
+    upcoming = collect_events(_holdings, days_ahead=1)
     if upcoming:
         lines.append("")
         lines.append("<b>📅 오늘 일정</b>")

@@ -22,6 +22,7 @@ from blog_ideas import generate_blog_ideas
 from config import Config
 import transactions
 import yfinance as yf
+import ibkr_flex
 
 _config = Config()
 
@@ -324,6 +325,11 @@ def handle_sell_yes(chat_id: int, arg: str):
 
 def handle_portfolio(chat_id: int):
     try:
+        ibkr = ibkr_flex.get_account_data()
+        if ibkr["error"] is None and ibkr["positions"]:
+            msg = ibkr_flex.build_account_section(ibkr["positions"], ibkr["cash_usd"])
+            send_message(msg, chat_id=str(chat_id))
+            return
         send_message(transactions.format_portfolio(), chat_id=str(chat_id))
     except Exception as e:
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
