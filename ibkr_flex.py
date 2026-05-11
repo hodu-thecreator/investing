@@ -13,6 +13,8 @@ import requests
 _SEND_URL = "https://ndcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
 _GET_URL  = "https://ndcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
 
+_FLEX_EXC = (requests.RequestException, ET.ParseError, RuntimeError, ValueError)
+
 
 def _send_request(token: str, query_id: str) -> str:
     r = requests.get(_SEND_URL, params={"t": token, "q": query_id, "v": "3"}, timeout=15)
@@ -42,9 +44,7 @@ def fetch_flex_xml() -> str:
     return _get_statement(token, ref)
 
 
-def parse_positions(xml_text: str) -> dict:
-    """Returns {symbol: {qty, cost_basis, mark_price, unrealized_pnl}}"""
-    root = ET.fromstring(xml_text)
+def parse_positions(root: ET.Element) -> dict:
     out: dict = {}
     for pos in root.iter("OpenPosition"):
         sym = pos.get("symbol")
@@ -66,9 +66,7 @@ def parse_positions(xml_text: str) -> dict:
     return out
 
 
-def parse_cash(xml_text: str) -> float:
-    """Returns USD ending cash balance."""
-    root = ET.fromstring(xml_text)
+def parse_cash(root: ET.Element) -> float:
     for cash in root.iter("CashReportCurrency"):
         if cash.get("currency") == "USD":
             try:
@@ -78,9 +76,7 @@ def parse_cash(xml_text: str) -> float:
     return 0.0
 
 
-def parse_trades(xml_text: str) -> list[dict]:
-    """Returns list of trades as {symbol, date, action, qty, price}."""
-    root = ET.fromstring(xml_text)
+def parse_trades(root: ET.Element) -> list[dict]:
     trades = []
     for t in root.iter("Trade"):
         sym    = t.get("symbol")
@@ -105,31 +101,43 @@ def parse_trades(xml_text: str) -> list[dict]:
 
 def get_account_data() -> dict:
     """
-    IBKR 계좌 전체 조회.
-    토큰 미설정 시 error 반환 → 호출자가 config 폴백 처리.
-    Returns: {holdings, positions, cash_usd, trades, error}
+    IBKR 계좌 전체 조회. 토큰 미설정/네트워크 오류 시 error 필드에 메시지.
+    Returns: {positions, cash_usd, trades, error}
     """
     try:
-        xml       = fetch_flex_xml()
-        positions = parse_positions(xml)
-        cash      = parse_cash(xml)
-        trades    = parse_trades(xml)
-        holdings  = {sym: d["qty"] for sym, d in positions.items()}
+        root = ET.fromstring(fetch_flex_xml())
         return {
-            "holdings":  holdings,
-            "positions": positions,
-            "cash_usd":  cash,
-            "trades":    trades,
+            "positions": parse_positions(root),
+            "cash_usd":  parse_cash(root),
+            "trades":    parse_trades(root),
             "error":     None,
         }
-    except Exception as e:
+    except _FLEX_EXC as e:
         return {
             "error":     str(e),
-            "holdings":  {},
             "positions": {},
             "cash_usd":  0.0,
             "trades":    [],
         }
+
+
+def resolve_holdings_and_cash(config) -> tuple[dict, float, dict]:
+    """
+    IBKR 실계좌 우선, 실패 시 config 폴백.
+    Returns: (holdings, idle_cash, ibkr_data)
+    ibkr_data["error"]가 None이면 IBKR 사용 중 → 호출자가 추가 섹션 빌드 가능.
+    """
+    data = get_account_data()
+    if data["error"] is None and data["positions"]:
+        holdings = {sym: d["qty"] for sym, d in data["positions"].items()}
+        return holdings, data["cash_usd"], data
+    if data["error"] and os.getenv("IBKR_FLEX_TOKEN"):
+        print(f"[ibkr] 조회 실패 — config 폴백: {data['error']}")
+    return config.HOLDINGS, config.IDLE_CASH_USD, data
+
+
+def _fmt_qty(qty: float) -> str:
+    return f"{qty:.0f}주" if qty.is_integer() else f"{qty:.2f}주"
 
 
 def build_account_section(positions: dict, cash_usd: float) -> str:
@@ -137,21 +145,23 @@ def build_account_section(positions: dict, cash_usd: float) -> str:
     if not positions and cash_usd <= 0:
         return ""
 
-    total = cash_usd + sum(
-        d["mark_price"] * d["qty"] for d in positions.values()
-    )
+    items = []
+    for sym, d in positions.items():
+        val = d["mark_price"] * d["qty"]
+        items.append((sym, d, val))
+    items.sort(key=lambda x: -x[2])
+
+    total = cash_usd + sum(val for _, _, val in items)
     lines = [f"<b>💼 계좌 현황</b>  총 <b>${total:,.0f}</b>"]
 
-    for sym, d in sorted(positions.items(), key=lambda x: -x[1]["mark_price"] * x[1]["qty"]):
-        val     = d["mark_price"] * d["qty"]
+    for sym, d, val in items:
         pnl     = d["unrealized_pnl"]
         cost    = d["cost_basis"] * d["qty"]
         pnl_pct = pnl / cost * 100 if cost else 0
         sign    = "+" if pnl >= 0 else ""
         emoji   = "🟢" if pnl >= 0 else "🔴"
-        qty_str = f"{d['qty']:.0f}주" if d["qty"] == int(d["qty"]) else f"{d['qty']:.2f}주"
         lines.append(
-            f"  {emoji} <b>{sym}</b>  {qty_str}  ${val:,.0f}"
+            f"  {emoji} <b>{sym}</b>  {_fmt_qty(d['qty'])}  ${val:,.0f}"
             f"  {sign}${pnl:,.0f} ({sign}{pnl_pct:.1f}%)"
         )
 

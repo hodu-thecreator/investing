@@ -779,13 +779,8 @@ def build_report() -> str:
     risk_score, risk_signals = calc_macro_risk_score(indicators)
     nzd_rate = indicators.get("nzd", {}).get("usd_to_nzd", 0)
 
-    # ── IBKR 실계좌 (토큰 미설정 시 config 폴백) ──────────────────
-    _ibkr    = ibkr_flex.get_account_data()
-    _ibkr_ok = not _ibkr["error"] and bool(_ibkr["holdings"])
-    holdings  = _ibkr["holdings"]  if _ibkr_ok else _config.HOLDINGS
-    idle_cash = _ibkr["cash_usd"]  if _ibkr_ok else _config.IDLE_CASH_USD
-    if _ibkr["error"] and os.getenv("IBKR_FLEX_TOKEN"):
-        print(f"[ibkr] 조회 실패 — config 폴백: {_ibkr['error']}")
+    holdings, idle_cash, _ibkr = ibkr_flex.resolve_holdings_and_cash(_config)
+    _ibkr_ok = _ibkr["error"] is None and bool(_ibkr["positions"])
 
     # ── [1] 주요 지표 섹션 ─────────────────────────────────────────
     lines.append("\n<b>📈 주요 지표</b>")
