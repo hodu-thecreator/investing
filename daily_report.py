@@ -23,7 +23,8 @@ from telegram_notifier import send_message
 from config import Config
 from dca_calculator import build_dca_section
 from events import build_calendar_section
-from rebalancing import check_drifts
+from rebalancing import check_drifts, calc_portfolio_state
+import ibkr_flex
 
 _config = Config()
 
@@ -778,6 +779,14 @@ def build_report() -> str:
     risk_score, risk_signals = calc_macro_risk_score(indicators)
     nzd_rate = indicators.get("nzd", {}).get("usd_to_nzd", 0)
 
+    # ── IBKR 실계좌 (토큰 미설정 시 config 폴백) ──────────────────
+    _ibkr    = ibkr_flex.get_account_data()
+    _ibkr_ok = not _ibkr["error"] and bool(_ibkr["holdings"])
+    holdings  = _ibkr["holdings"]  if _ibkr_ok else _config.HOLDINGS
+    idle_cash = _ibkr["cash_usd"]  if _ibkr_ok else _config.IDLE_CASH_USD
+    if _ibkr["error"] and os.getenv("IBKR_FLEX_TOKEN"):
+        print(f"[ibkr] 조회 실패 — config 폴백: {_ibkr['error']}")
+
     # ── [1] 주요 지표 섹션 ─────────────────────────────────────────
     lines.append("\n<b>📈 주요 지표</b>")
 
@@ -901,7 +910,7 @@ def build_report() -> str:
             line += f"  <i>{' · '.join(reasons[:2])}</i>"
 
         # 극단 과열 감지 (위험점수 7+ 상황에서만 표시)
-        if risk_score >= 7 and ticker in _config.HOLDINGS and _config.HOLDINGS[ticker] > 0.01:
+        if risk_score >= 7 and ticker in holdings and holdings[ticker] > 0.01:
             eo = check_extreme_overheated(result)
             if eo:
                 extreme_overheat_list.append(
@@ -950,7 +959,7 @@ def build_report() -> str:
 
     # ── [3] 현금 비중 + 위험점수 섹션 ────────────────────────────
     cash_section, available_cash = build_cash_section(
-        _config.HOLDINGS, _config.IDLE_CASH_USD,
+        holdings, idle_cash,
         _config.TARGET_CASH_RATIO, _config.CASH_TICKERS,
         risk_score=risk_score, risk_signals=risk_signals,
     )
@@ -983,14 +992,15 @@ def build_report() -> str:
         lines.append(dca_section)
 
     # ── [6] 다가오는 이벤트 캘린더 ────────────────────────────────
-    cal_section = build_calendar_section(_config.HOLDINGS, days_ahead=14)
+    cal_section = build_calendar_section(holdings, days_ahead=14)
     if cal_section:
         lines.append("\n" + "━" * 28)
         lines.append(cal_section)
 
     # ── [7] 리밸런싱 알림 (드리프트 ±5%p 초과 시만) ──────────────
     try:
-        drifts = check_drifts()
+        reb_state = calc_portfolio_state(holdings, idle_cash) if _ibkr_ok else None
+        drifts = check_drifts(state=reb_state)
         if drifts:
             lines.append("\n" + "━" * 28)
             lines.append("<b>⚖️ 리밸런싱 알림</b>")
@@ -1008,7 +1018,7 @@ def build_report() -> str:
         print(f"[rebalance] {e}")
 
     # ── [8] 예상 배당 섹션 ────────────────────────────────────────
-    div_section = build_dividend_section(_config.HOLDINGS, nzd_rate)
+    div_section = build_dividend_section(holdings, nzd_rate)
     if div_section:
         lines.append("\n" + "━" * 28)
         lines.append(div_section)

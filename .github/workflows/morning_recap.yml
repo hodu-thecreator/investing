@@ -28,5 +28,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           WATCH_STOCKS: ${{ secrets.WATCH_STOCKS }}
+          IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
+          IBKR_FLEX_QUERY_ID: ${{ secrets.IBKR_FLEX_QUERY_ID }}
           FORCE_MORNING: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: python morning_recap.py

@@ -15,6 +15,7 @@ from config import Config
 from telegram_notifier import send_message
 from market_indicators import get_vix, get_usd_krw, get_nzd_rate
 from events import collect_events
+import ibkr_flex
 
 _config = Config()
 
@@ -46,6 +47,17 @@ def build_morning_recap() -> str:
     lines = [f"<b>🌅 미국 장 마감 요약</b>  {today} 아침"]
     lines.append("━" * 28)
 
+    # ── IBKR 계좌 현황 ───────────────────────────────────────────
+    ibkr = ibkr_flex.get_account_data()
+    if not ibkr["error"] and ibkr["positions"]:
+        acct_section = ibkr_flex.build_account_section(ibkr["positions"], ibkr["cash_usd"])
+        if acct_section:
+            lines.append("")
+            lines.append(acct_section)
+
+    # 모버 계산에 사용할 보유 종목 (IBKR 우선, 없으면 config)
+    _holdings = ibkr["holdings"] if not ibkr["error"] and ibkr["holdings"] else _config.HOLDINGS
+
     # ── 주요 지수 ────────────────────────────────────────────────
     lines.append("")
     lines.append("<b>📊 주요 지수</b>")
@@ -69,7 +81,7 @@ def build_morning_recap() -> str:
 
     # ── 보유 종목 큰 변동 ────────────────────────────────────────
     movers = []
-    for ticker, qty in _config.HOLDINGS.items():
+    for ticker, qty in _holdings.items():
         if not qty or qty <= 0:
             continue
         d = daily_change(ticker)
