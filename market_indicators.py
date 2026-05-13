@@ -184,16 +184,30 @@ def get_market_breadth() -> dict:
 # ── NZD/USD 환율 ─────────────────────────────────────────────────
 
 def get_nzd_rate() -> dict:
-    """USD → NZD 환율 (1 USD = ? NZD)"""
-    # 1순위: frankfurter.app (무료, 키 불필요)
+    """USD → NZD 환율 + 1주일 변동률"""
     try:
         r = requests.get("https://api.frankfurter.app/latest?from=USD&to=NZD", timeout=8)
         r.raise_for_status()
-        rate = r.json()["rates"]["NZD"]
-        return {"usd_to_nzd": round(rate, 4), "source": "frankfurter"}
+        current = float(r.json()["rates"]["NZD"])
+        from datetime import datetime, timedelta
+        wago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+        try:
+            r2 = requests.get(
+                f"https://api.frankfurter.app/{wago}?from=USD&to=NZD", timeout=8
+            )
+            r2.raise_for_status()
+            week_ago = float(r2.json()["rates"]["NZD"])
+            change_pct = (current - week_ago) / week_ago * 100
+        except Exception:
+            week_ago, change_pct = None, None
+        return {
+            "usd_to_nzd": round(current, 4),
+            "week_ago": round(week_ago, 4) if week_ago else None,
+            "change_pct": round(change_pct, 2) if change_pct is not None else None,
+            "source": "frankfurter",
+        }
     except Exception:
         pass
-    # 2순위: open.er-api.com
     try:
         r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=8)
         r.raise_for_status()

@@ -112,10 +112,20 @@ def build_morning_recap() -> str:
             chg = f"  {arrow}{abs(krw['change_pct']):.2f}% (1주)"
         lines.append(f"  USD/KRW  ₩{krw['usd_to_krw']:,.2f}{chg}")
     if has_nzd:
-        lines.append(f"  USD/NZD  NZ${nzd['usd_to_nzd']:.4f}")
+        chg = ""
+        if nzd.get("change_pct") is not None:
+            arrow = "↑" if nzd["change_pct"] > 0 else "↓"
+            chg = f"  {arrow}{abs(nzd['change_pct']):.2f}% (1주)"
+        lines.append(f"  USD/NZD  NZ${nzd['usd_to_nzd']:.4f}{chg}")
     if has_krw and has_nzd:
         nzd_to_krw = krw["usd_to_krw"] / nzd["usd_to_nzd"]
-        lines.append(f"  NZD/KRW  ₩{nzd_to_krw:,.2f}")
+        chg = ""
+        if krw.get("week_ago") and nzd.get("week_ago"):
+            past = krw["week_ago"] / nzd["week_ago"]
+            change_pct = (nzd_to_krw - past) / past * 100
+            arrow = "↑" if change_pct > 0 else "↓"
+            chg = f"  {arrow}{abs(change_pct):.2f}% (1주)"
+        lines.append(f"  NZD/KRW  ₩{nzd_to_krw:,.2f}{chg}")
 
     # ── 오늘 일정 (24시간 이내) ──────────────────────────────────
     upcoming = collect_events(_holdings, days_ahead=1)
