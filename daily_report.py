@@ -819,12 +819,27 @@ def build_report() -> str:
         lines.append(f"  기준금리   {fed['value']}%")
 
     krw = indicators.get("usd_krw", {})
+    nzd_data = indicators.get("nzd", {})
     if not krw.get("error") and krw.get("usd_to_krw"):
         chg = ""
         if krw.get("change_pct") is not None:
             arrow = "↑" if krw["change_pct"] > 0 else "↓"
             chg = f"  {arrow}{abs(krw['change_pct']):.2f}% (1주 전 ₩{krw['week_ago']:,.0f})"
         lines.append(f"  USD/KRW    <b>₩{krw['usd_to_krw']:,.2f}</b>{chg}")
+        if not nzd_data.get("error") and nzd_data.get("usd_to_nzd"):
+            chg = ""
+            if nzd_data.get("change_pct") is not None and nzd_data.get("week_ago"):
+                arrow = "↑" if nzd_data["change_pct"] > 0 else "↓"
+                chg = f"  {arrow}{abs(nzd_data['change_pct']):.2f}% (1주 전 NZ${nzd_data['week_ago']:.4f})"
+            lines.append(f"  USD/NZD    NZ${nzd_data['usd_to_nzd']:.4f}{chg}")
+            nzd_to_krw = krw["usd_to_krw"] / nzd_data["usd_to_nzd"]
+            chg = ""
+            if krw.get("week_ago") and nzd_data.get("week_ago"):
+                past = krw["week_ago"] / nzd_data["week_ago"]
+                change_pct = (nzd_to_krw - past) / past * 100
+                arrow = "↑" if change_pct > 0 else "↓"
+                chg = f"  {arrow}{abs(change_pct):.2f}% (1주 전 ₩{past:,.0f})"
+            lines.append(f"  NZD/KRW    ₩{nzd_to_krw:,.2f}{chg}")
 
     # ── 거시 경고 지표 ────────────────────────────────────────────
     buffett = indicators.get("buffett", {})
@@ -1043,8 +1058,8 @@ def should_skip_run() -> tuple[bool, str]:
     target_min = 10 * 60  # 10:00 ET
     current_min = now_et.hour * 60 + now_et.minute
     diff = current_min - target_min
-    if abs(diff) > 30:
-        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±30분)"
+    if abs(diff) > 50:
+        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±50분)"
 
     return False, f"발송 시간 맞음 ({now_et:%H:%M ET})"
 

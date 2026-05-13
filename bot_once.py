@@ -366,6 +366,28 @@ def handle_rebalance(chat_id: int):
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
 
+def handle_ibkrsync(chat_id: int):
+    try:
+        ibkr = ibkr_flex.get_account_data()
+        if ibkr["error"] is not None:
+            send_message(f"❌ IBKR 조회 실패: <code>{ibkr['error']}</code>", chat_id=str(chat_id))
+            return
+        trades = ibkr.get("trades", [])
+        if not trades:
+            send_message("📭 IBKR 체결 내역 없음 (Flex Query 기간 내)", chat_id=str(chat_id))
+            return
+        added = transactions.sync_from_ibkr(trades)
+        send_message(
+            f"✅ IBKR 동기화 완료\n"
+            f"  조회된 체결: {len(trades)}건\n"
+            f"  신규 추가: <b>{added}건</b>\n"
+            f"  (중복 제외 후)",
+            chat_id=str(chat_id),
+        )
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
 def handle_help(chat_id: int):
     send_message(
         "<b>📖 사용 가능한 명령어</b>\n\n"
@@ -381,7 +403,8 @@ def handle_help(chat_id: int):
         "/portfolio — 보유 종목 평균단가 + 손익\n"
         "/history [N] — 최근 거래 내역 (기본 10건)\n"
         "/undo — 마지막 거래 기록 취소\n"
-        "/rebalance — 카테고리별 비중 vs 목표 점검\n\n"
+        "/rebalance — 카테고리별 비중 vs 목표 점검\n"
+        "/ibkrsync — IBKR 체결 내역을 거래 기록에 동기화\n\n"
         "<b>⚙️ 기타</b>\n"
         "/testapi — Claude API 연결 테스트\n"
         "/reset — Claude 대화 기록 초기화\n"
@@ -441,6 +464,8 @@ def dispatch(message: dict, state: dict):
         handle_undo(chat_id)
     elif cmd == "/rebalance":
         handle_rebalance(chat_id)
+    elif cmd == "/ibkrsync":
+        handle_ibkrsync(chat_id)
     elif cmd == "/testapi":
         send_message(claude_client.test_api(), chat_id=str(chat_id))
     elif cmd == "/reset":

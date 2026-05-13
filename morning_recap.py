@@ -42,6 +42,29 @@ def daily_change(ticker: str) -> dict | None:
         return None
 
 
+def _check_upcoming_dividends(holdings: dict, days_ahead: int = 7) -> list[str]:
+    """보유 종목 중 days_ahead일 이내 배당락일이 있으면 알림 문자열 반환."""
+    today = datetime.now(ZoneInfo("America/New_York")).date()
+    cutoff = today + timedelta(days=days_ahead)
+    alerts = []
+    for ticker in holdings:
+        try:
+            info = yf.Ticker(ticker).info
+            ex_ts = info.get("exDividendDate")
+            div_val = info.get("lastDividendValue") or info.get("dividendRate")
+            if not ex_ts:
+                continue
+            ex_date = datetime.utcfromtimestamp(ex_ts).date()
+            if today <= ex_date <= cutoff:
+                days_left = (ex_date - today).days
+                div_str = f"  ${div_val:.4f}" if div_val else ""
+                timing = "오늘" if days_left == 0 else f"{days_left}일 후"
+                alerts.append(f"  💵 <b>{ticker}</b>  배당락 {timing} ({ex_date}){div_str}")
+        except Exception:
+            continue
+    return alerts
+
+
 def build_morning_recap() -> str:
     today = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%-m/%-d %a")
     lines = [f"<b>🌅 미국 장 마감 요약</b>  {today} 아침"]
@@ -112,7 +135,20 @@ def build_morning_recap() -> str:
             chg = f"  {arrow}{abs(krw['change_pct']):.2f}% (1주)"
         lines.append(f"  USD/KRW  ₩{krw['usd_to_krw']:,.2f}{chg}")
     if has_nzd:
-        lines.append(f"  USD/NZD  NZ${nzd['usd_to_nzd']:.4f}")
+        chg = ""
+        if nzd.get("change_pct") is not None:
+            arrow = "↑" if nzd["change_pct"] > 0 else "↓"
+            chg = f"  {arrow}{abs(nzd['change_pct']):.2f}% (1주)"
+        lines.append(f"  USD/NZD  NZ${nzd['usd_to_nzd']:.4f}{chg}")
+    if has_krw and has_nzd:
+        nzd_to_krw = krw["usd_to_krw"] / nzd["usd_to_nzd"]
+        chg = ""
+        if krw.get("week_ago") and nzd.get("week_ago"):
+            past = krw["week_ago"] / nzd["week_ago"]
+            change_pct = (nzd_to_krw - past) / past * 100
+            arrow = "↑" if change_pct > 0 else "↓"
+            chg = f"  {arrow}{abs(change_pct):.2f}% (1주)"
+        lines.append(f"  NZD/KRW  ₩{nzd_to_krw:,.2f}{chg}")
 
     # ── 오늘 일정 (24시간 이내) ──────────────────────────────────
     upcoming = collect_events(_holdings, days_ahead=1)
@@ -121,6 +157,14 @@ def build_morning_recap() -> str:
         lines.append("<b>📅 오늘 일정</b>")
         for d, kind, label in upcoming[:5]:
             lines.append(f"  • {label}")
+
+    # ── 배당락일 임박 (7일 이내) ─────────────────────────────────
+    div_alerts = _check_upcoming_dividends(_holdings)
+    if div_alerts:
+        lines.append("")
+        lines.append("<b>💰 배당락일 임박</b>")
+        for line in div_alerts:
+            lines.append(line)
 
     lines.append("")
     lines.append("━" * 28)

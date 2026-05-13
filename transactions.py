@@ -176,6 +176,43 @@ def format_history(limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+def sync_from_ibkr(ibkr_trades: list[dict]) -> int:
+    """
+    IBKR 체결 내역을 .transactions.json에 병합.
+    이미 있는 항목(날짜+티커+타입+수량+가격 동일)은 건너뜀.
+    Returns: 추가된 건수.
+    """
+    existing = _load()
+    existing_keys = {
+        (r["date"], r["ticker"], r["type"], float(r["qty"]), float(r["price"]))
+        for r in existing
+    }
+    added = 0
+    for t in ibkr_trades:
+        action = t.get("action", "").upper()
+        rec_type = "buy" if "BUY" in action else "sell" if "SELL" in action else None
+        if rec_type is None:
+            continue
+        key = (t["date"], t["symbol"].upper(), rec_type, float(t["qty"]), float(t["price"]))
+        if key in existing_keys:
+            continue
+        existing.append({
+            "type":   rec_type,
+            "ticker": t["symbol"].upper(),
+            "qty":    float(t["qty"]),
+            "price":  float(t["price"]),
+            "date":   t["date"],
+            "ts":     datetime.now().isoformat(timespec="seconds"),
+            "source": "ibkr",
+        })
+        existing_keys.add(key)
+        added += 1
+    if added:
+        existing.sort(key=lambda r: r["date"])
+        _save(existing)
+    return added
+
+
 if __name__ == "__main__":
     print(format_portfolio())
     print()
