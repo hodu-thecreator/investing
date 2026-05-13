@@ -819,12 +819,16 @@ def build_report() -> str:
         lines.append(f"  기준금리   {fed['value']}%")
 
     krw = indicators.get("usd_krw", {})
+    nzd_data = indicators.get("nzd", {})
     if not krw.get("error") and krw.get("usd_to_krw"):
         chg = ""
         if krw.get("change_pct") is not None:
             arrow = "↑" if krw["change_pct"] > 0 else "↓"
             chg = f"  {arrow}{abs(krw['change_pct']):.2f}% (1주 전 ₩{krw['week_ago']:,.0f})"
         lines.append(f"  USD/KRW    <b>₩{krw['usd_to_krw']:,.2f}</b>{chg}")
+        if not nzd_data.get("error") and nzd_data.get("usd_to_nzd"):
+            nzd_to_krw = krw["usd_to_krw"] / nzd_data["usd_to_nzd"]
+            lines.append(f"  NZD/KRW    ₩{nzd_to_krw:,.2f}")
 
     # ── 거시 경고 지표 ────────────────────────────────────────────
     buffett = indicators.get("buffett", {})

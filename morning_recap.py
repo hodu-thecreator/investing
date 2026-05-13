@@ -113,6 +113,9 @@ def build_morning_recap() -> str:
         lines.append(f"  USD/KRW  ₩{krw['usd_to_krw']:,.2f}{chg}")
     if has_nzd:
         lines.append(f"  USD/NZD  NZ${nzd['usd_to_nzd']:.4f}")
+    if has_krw and has_nzd:
+        nzd_to_krw = krw["usd_to_krw"] / nzd["usd_to_nzd"]
+        lines.append(f"  NZD/KRW  ₩{nzd_to_krw:,.2f}")
 
     # ── 오늘 일정 (24시간 이내) ──────────────────────────────────
     upcoming = collect_events(_holdings, days_ahead=1)
