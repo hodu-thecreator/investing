@@ -1058,8 +1058,8 @@ def should_skip_run() -> tuple[bool, str]:
     target_min = 10 * 60  # 10:00 ET
     current_min = now_et.hour * 60 + now_et.minute
     diff = current_min - target_min
-    if abs(diff) > 30:
-        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±30분)"
+    if abs(diff) > 50:
+        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±50분)"
 
     return False, f"발송 시간 맞음 ({now_et:%H:%M ET})"
 
