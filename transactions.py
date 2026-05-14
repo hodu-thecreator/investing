@@ -176,12 +176,11 @@ def format_history(limit: int = 10) -> str:
     return "\n".join(lines)
 
 
+_IBKR_ACTION_MAP = {"BUY": "buy", "SELL": "sell"}
+
+
 def sync_from_ibkr(ibkr_trades: list[dict]) -> int:
-    """
-    IBKR 체결 내역을 .transactions.json에 병합.
-    이미 있는 항목(날짜+티커+타입+수량+가격 동일)은 건너뜀.
-    Returns: 추가된 건수.
-    """
+    """IBKR 체결을 병합 — dedup 키: (date, ticker, type, qty, price)."""
     existing = _load()
     existing_keys = {
         (r["date"], r["ticker"], r["type"], float(r["qty"]), float(r["price"]))
@@ -189,19 +188,25 @@ def sync_from_ibkr(ibkr_trades: list[dict]) -> int:
     }
     added = 0
     for t in ibkr_trades:
-        action = t.get("action", "").upper()
-        rec_type = "buy" if "BUY" in action else "sell" if "SELL" in action else None
+        rec_type = _IBKR_ACTION_MAP.get(str(t.get("action", "")).upper())
         if rec_type is None:
             continue
-        key = (t["date"], t["symbol"].upper(), rec_type, float(t["qty"]), float(t["price"]))
+        try:
+            symbol = t["symbol"].upper()
+            qty    = float(t["qty"])
+            price  = float(t["price"])
+            tdate  = t["date"]
+        except (KeyError, ValueError, TypeError):
+            continue
+        key = (tdate, symbol, rec_type, qty, price)
         if key in existing_keys:
             continue
         existing.append({
             "type":   rec_type,
-            "ticker": t["symbol"].upper(),
-            "qty":    float(t["qty"]),
-            "price":  float(t["price"]),
-            "date":   t["date"],
+            "ticker": symbol,
+            "qty":    qty,
+            "price":  price,
+            "date":   tdate,
             "ts":     datetime.now().isoformat(timespec="seconds"),
             "source": "ibkr",
         })
