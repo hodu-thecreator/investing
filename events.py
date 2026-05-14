@@ -3,6 +3,7 @@
 이벤트 캘린더 — 보유 종목 실적/배당락일 + 거시 이벤트(FOMC, CPI).
 N일 이내 다가오는 이벤트만 추려서 표시.
 """
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta
 import yfinance as yf
 
@@ -58,12 +59,37 @@ def _earnings_date(ticker: str) -> date | None:
     return None
 
 
-def _ex_div_date(ticker: str) -> date | None:
+def _ex_div_info(ticker: str) -> tuple[date | None, float | None]:
     try:
         info = yf.Ticker(ticker).info
-        return _safe_date(info.get("exDividendDate"))
+        d = _safe_date(info.get("exDividendDate"))
+        amt = info.get("lastDividendValue") or info.get("dividendRate")
+        return d, (float(amt) if amt else None)
     except Exception:
-        return None
+        return None, None
+
+
+def _ex_div_date(ticker: str) -> date | None:
+    return _ex_div_info(ticker)[0]
+
+
+def _ticker_events(ticker: str) -> dict:
+    """단일 종목 실적·배당 fetch (병렬 호출용)."""
+    div_date, div_amt = _ex_div_info(ticker)
+    return {
+        "ticker":     ticker,
+        "earnings":   _earnings_date(ticker),
+        "div_date":   div_date,
+        "div_amount": div_amt,
+    }
+
+
+def _fetch_holdings_events(holdings: dict[str, float]) -> list[dict]:
+    tickers = [t for t, q in holdings.items() if q >= 0.01]
+    if not tickers:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(tickers))) as ex:
+        return list(ex.map(_ticker_events, tickers))
 
 
 def collect_events(holdings: dict[str, float], days_ahead: int = 14) -> list[tuple]:
@@ -71,24 +97,19 @@ def collect_events(holdings: dict[str, float], days_ahead: int = 14) -> list[tup
     horizon = today + timedelta(days=days_ahead)
     items = []
 
-    # 보유 종목 실적/배당
-    for ticker, shares in holdings.items():
-        if shares < 0.01:
-            continue
-        ed = _earnings_date(ticker)
-        if ed and today <= ed <= horizon:
-            items.append((ed, "earnings", f"📊 {ticker} 실적 발표"))
-        dd = _ex_div_date(ticker)
-        if dd and today <= dd <= horizon:
-            items.append((dd, "dividend", f"💰 {ticker} 배당락"))
+    for ev in _fetch_holdings_events(holdings):
+        t = ev["ticker"]
+        if ev["earnings"] and today <= ev["earnings"] <= horizon:
+            items.append((ev["earnings"], "earnings", f"📊 {t} 실적 발표"))
+        if ev["div_date"] and today <= ev["div_date"] <= horizon:
+            amt = f" ${ev['div_amount']:.4f}" if ev["div_amount"] else ""
+            items.append((ev["div_date"], "dividend", f"💰 {t} 배당락{amt}"))
 
-    # FOMC
     for s in FOMC_DATES_2026:
         d = datetime.strptime(s, "%Y-%m-%d").date()
         if today <= d <= horizon:
             items.append((d, "fomc", "🏦 FOMC 회의"))
 
-    # CPI
     for s in CPI_DATES_2026:
         d = datetime.strptime(s, "%Y-%m-%d").date()
         if today <= d <= horizon:
@@ -96,6 +117,24 @@ def collect_events(holdings: dict[str, float], days_ahead: int = 14) -> list[tup
 
     items.sort(key=lambda x: x[0])
     return items
+
+
+def get_upcoming_dividends(holdings: dict[str, float], days_ahead: int = 7) -> list[dict]:
+    """보유 종목 중 days_ahead일 이내 배당락일 + 배당금. 병렬 fetch."""
+    today = datetime.now().date()
+    horizon = today + timedelta(days=days_ahead)
+    out = []
+    for ev in _fetch_holdings_events(holdings):
+        d = ev["div_date"]
+        if d and today <= d <= horizon:
+            out.append({
+                "ticker":    ev["ticker"],
+                "date":      d,
+                "amount":    ev["div_amount"],
+                "days_left": (d - today).days,
+            })
+    out.sort(key=lambda x: x["date"])
+    return out
 
 
 def build_calendar_section(holdings: dict[str, float], days_ahead: int = 14) -> str:

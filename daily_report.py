@@ -18,7 +18,7 @@ import pandas as pd
 import claude_client
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from market_indicators import collect_all
+from market_indicators import collect_all, get_nzd_krw_cross, format_change_chip
 from telegram_notifier import send_message
 from config import Config
 from dca_calculator import build_dca_section
@@ -819,27 +819,19 @@ def build_report() -> str:
         lines.append(f"  기준금리   {fed['value']}%")
 
     krw = indicators.get("usd_krw", {})
-    nzd_data = indicators.get("nzd", {})
-    if not krw.get("error") and krw.get("usd_to_krw"):
-        chg = ""
-        if krw.get("change_pct") is not None:
-            arrow = "↑" if krw["change_pct"] > 0 else "↓"
-            chg = f"  {arrow}{abs(krw['change_pct']):.2f}% (1주 전 ₩{krw['week_ago']:,.0f})"
-        lines.append(f"  USD/KRW    <b>₩{krw['usd_to_krw']:,.2f}</b>{chg}")
-        if not nzd_data.get("error") and nzd_data.get("usd_to_nzd"):
-            chg = ""
-            if nzd_data.get("change_pct") is not None and nzd_data.get("week_ago"):
-                arrow = "↑" if nzd_data["change_pct"] > 0 else "↓"
-                chg = f"  {arrow}{abs(nzd_data['change_pct']):.2f}% (1주 전 NZ${nzd_data['week_ago']:.4f})"
-            lines.append(f"  USD/NZD    NZ${nzd_data['usd_to_nzd']:.4f}{chg}")
-            nzd_to_krw = krw["usd_to_krw"] / nzd_data["usd_to_nzd"]
-            chg = ""
-            if krw.get("week_ago") and nzd_data.get("week_ago"):
-                past = krw["week_ago"] / nzd_data["week_ago"]
-                change_pct = (nzd_to_krw - past) / past * 100
-                arrow = "↑" if change_pct > 0 else "↓"
-                chg = f"  {arrow}{abs(change_pct):.2f}% (1주 전 ₩{past:,.0f})"
-            lines.append(f"  NZD/KRW    ₩{nzd_to_krw:,.2f}{chg}")
+    nzd = indicators.get("nzd", {})
+    has_krw = not krw.get("error") and krw.get("usd_to_krw")
+    has_nzd = not nzd.get("error") and nzd.get("usd_to_nzd")
+    if has_krw:
+        suffix = f"(1주 전 ₩{krw['week_ago']:,.0f})" if krw.get("week_ago") else "(1주)"
+        lines.append(f"  USD/KRW    <b>₩{krw['usd_to_krw']:,.2f}</b>{format_change_chip(krw.get('change_pct'), suffix)}")
+    if has_nzd:
+        suffix = f"(1주 전 NZ${nzd['week_ago']:.4f})" if nzd.get("week_ago") else "(1주)"
+        lines.append(f"  USD/NZD    NZ${nzd['usd_to_nzd']:.4f}{format_change_chip(nzd.get('change_pct'), suffix)}")
+    cross = get_nzd_krw_cross(krw, nzd) if (has_krw and has_nzd) else None
+    if cross:
+        suffix = f"(1주 전 ₩{cross['week_ago']:,.0f})" if cross.get("week_ago") else "(1주)"
+        lines.append(f"  NZD/KRW    ₩{cross['nzd_to_krw']:,.2f}{format_change_chip(cross.get('change_pct'), suffix)}")
 
     # ── 거시 경고 지표 ────────────────────────────────────────────
     buffett = indicators.get("buffett", {})
@@ -1041,6 +1033,12 @@ def build_report() -> str:
 
 # ── 실행 ─────────────────────────────────────────────────────────
 
+# 10:00 ET ± SEND_WINDOW_MIN 안에서만 발송. GH Actions 크론 지연(보통 5~30분)을
+# 흡수하려고 50분으로 잡음. 두 크론(14/15 UTC)이 60분 간격이라 50분 이하여야
+# 한쪽만 fire 되는 게 보장됨.
+SEND_WINDOW_MIN = 50
+
+
 def should_skip_run() -> tuple[bool, str]:
     """
     미국 동부 시간 기준 장 오픈 후 30분(10:00 ET ± 30분) 시점인지 확인.
@@ -1058,8 +1056,8 @@ def should_skip_run() -> tuple[bool, str]:
     target_min = 10 * 60  # 10:00 ET
     current_min = now_et.hour * 60 + now_et.minute
     diff = current_min - target_min
-    if abs(diff) > 50:
-        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±50분)"
+    if abs(diff) > SEND_WINDOW_MIN:
+        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±{SEND_WINDOW_MIN}분)"
 
     return False, f"발송 시간 맞음 ({now_et:%H:%M ET})"
 

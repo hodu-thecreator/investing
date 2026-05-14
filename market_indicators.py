@@ -8,12 +8,19 @@ import os
 import time
 import requests
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 import warnings
 warnings.filterwarnings("ignore")
 
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+
+
+def format_change_chip(pct: float | None, suffix: str = "(1주)") -> str:
+    if pct is None:
+        return ""
+    arrow = "↑" if pct > 0 else "↓"
+    return f"  {arrow}{abs(pct):.2f}% {suffix}"
 
 HEADERS = {
     "User-Agent": (
@@ -181,72 +188,62 @@ def get_market_breadth() -> dict:
     }
 
 
-# ── NZD/USD 환율 ─────────────────────────────────────────────────
+# ── 환율 (Frankfurter API) ───────────────────────────────────────
+
+def _frankfurter_pair(target: str, decimals: int) -> dict | None:
+    """USD → target 환율 + 1주일 전 비교. 실패 시 None."""
+    try:
+        r = requests.get(
+            f"https://api.frankfurter.app/latest?from=USD&to={target}", timeout=8
+        )
+        r.raise_for_status()
+        current = float(r.json()["rates"][target])
+    except Exception:
+        return None
+    wago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+    try:
+        r2 = requests.get(
+            f"https://api.frankfurter.app/{wago}?from=USD&to={target}", timeout=8
+        )
+        r2.raise_for_status()
+        week_ago = float(r2.json()["rates"][target])
+        change_pct = (current - week_ago) / week_ago * 100
+    except Exception:
+        week_ago, change_pct = None, None
+    return {
+        "current": round(current, decimals),
+        "week_ago": round(week_ago, decimals) if week_ago is not None else None,
+        "change_pct": round(change_pct, 2) if change_pct is not None else None,
+    }
+
 
 def get_nzd_rate() -> dict:
     """USD → NZD 환율 + 1주일 변동률"""
-    try:
-        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=NZD", timeout=8)
-        r.raise_for_status()
-        current = float(r.json()["rates"]["NZD"])
-        from datetime import datetime, timedelta
-        wago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
-        try:
-            r2 = requests.get(
-                f"https://api.frankfurter.app/{wago}?from=USD&to=NZD", timeout=8
-            )
-            r2.raise_for_status()
-            week_ago = float(r2.json()["rates"]["NZD"])
-            change_pct = (current - week_ago) / week_ago * 100
-        except Exception:
-            week_ago, change_pct = None, None
+    pair = _frankfurter_pair("NZD", decimals=4)
+    if pair:
         return {
-            "usd_to_nzd": round(current, 4),
-            "week_ago": round(week_ago, 4) if week_ago else None,
-            "change_pct": round(change_pct, 2) if change_pct is not None else None,
-            "source": "frankfurter",
+            "usd_to_nzd": pair["current"],
+            "week_ago":   pair["week_ago"],
+            "change_pct": pair["change_pct"],
+            "source":     "frankfurter",
         }
-    except Exception:
-        pass
     try:
         r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=8)
         r.raise_for_status()
-        rate = r.json()["rates"]["NZD"]
-        return {"usd_to_nzd": round(rate, 4), "source": "er-api"}
+        return {"usd_to_nzd": round(r.json()["rates"]["NZD"], 4), "source": "er-api"}
     except Exception:
-        pass
-    return {"error": "환율 조회 실패"}
+        return {"error": "환율 조회 실패"}
 
-
-# ── USD/KRW 환율 ─────────────────────────────────────────────────
 
 def get_usd_krw() -> dict:
     """USD → KRW 환율 + 1주일 변동률"""
-    try:
-        r = requests.get(
-            "https://api.frankfurter.app/latest?from=USD&to=KRW", timeout=8
-        )
-        r.raise_for_status()
-        current = float(r.json()["rates"]["KRW"])
-        # 1주일 전 환율
-        from datetime import datetime, timedelta
-        wago = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
-        try:
-            r2 = requests.get(
-                f"https://api.frankfurter.app/{wago}?from=USD&to=KRW", timeout=8
-            )
-            r2.raise_for_status()
-            week_ago = float(r2.json()["rates"]["KRW"])
-            change_pct = (current - week_ago) / week_ago * 100
-        except Exception:
-            week_ago, change_pct = None, None
+    pair = _frankfurter_pair("KRW", decimals=2)
+    if pair:
         return {
-            "usd_to_krw": round(current, 2),
-            "week_ago": round(week_ago, 2) if week_ago else None,
-            "change_pct": round(change_pct, 2) if change_pct is not None else None,
+            "usd_to_krw": pair["current"],
+            "week_ago":   pair["week_ago"],
+            "change_pct": pair["change_pct"],
         }
-    except Exception:
-        pass
     try:
         df = yf.Ticker("USDKRW=X").history(period="10d")
         if df is not None and not df.empty:
@@ -255,12 +252,30 @@ def get_usd_krw() -> dict:
             change_pct = (current - week_ago) / week_ago * 100 if week_ago else None
             return {
                 "usd_to_krw": round(current, 2),
-                "week_ago": round(week_ago, 2) if week_ago else None,
+                "week_ago":   round(week_ago, 2) if week_ago is not None else None,
                 "change_pct": round(change_pct, 2) if change_pct is not None else None,
             }
     except Exception:
         pass
     return {"error": "USD/KRW 환율 조회 실패"}
+
+
+def get_nzd_krw_cross(krw: dict, nzd: dict) -> dict | None:
+    """USD/KRW와 USD/NZD에서 NZD/KRW 교차환율 + 1주 변동률 도출."""
+    if krw.get("error") or nzd.get("error"):
+        return None
+    if not krw.get("usd_to_krw") or not nzd.get("usd_to_nzd"):
+        return None
+    current = krw["usd_to_krw"] / nzd["usd_to_nzd"]
+    week_ago, change_pct = None, None
+    if krw.get("week_ago") and nzd.get("week_ago"):
+        week_ago = krw["week_ago"] / nzd["week_ago"]
+        change_pct = (current - week_ago) / week_ago * 100
+    return {
+        "nzd_to_krw": round(current, 2),
+        "week_ago":   round(week_ago, 2) if week_ago is not None else None,
+        "change_pct": round(change_pct, 2) if change_pct is not None else None,
+    }
 
 
 # ── FRED 경제지표 ─────────────────────────────────────────────────
