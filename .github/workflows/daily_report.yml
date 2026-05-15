@@ -2,11 +2,9 @@ name: Daily Investment Report
 
 on:
   schedule:
-    # 미국 장 오픈 후 30분 (10:00 ET) — DST 자동 처리 위해 두 개 모두 등록
-    # 코드에서 ET 시간 체크 후 한 쪽만 실제 발송
-    - cron: "0 14 * * 1-5"  # EDT 기간 (3월~11월): 14:00 UTC = 10:00 EDT
-    - cron: "0 15 * * 1-5"  # EST 기간 (11월~3월): 15:00 UTC = 10:00 EST
-  workflow_dispatch:  # 수동 실행 버튼 (시간 체크 무시)
+    # 14:00 UTC = 10:00 EDT (여름) / 9:00 EST (겨울, 장 오픈 30분 전)
+    - cron: "0 14 * * 1-5"
+  workflow_dispatch:
 
 jobs:
   send-report:
@@ -36,6 +34,5 @@ jobs:
           WATCH_STOCKS: ${{ secrets.WATCH_STOCKS }}
           IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
           IBKR_FLEX_QUERY_ID: ${{ secrets.IBKR_FLEX_QUERY_ID }}
-          # workflow_dispatch에서 실행 시 시간 체크 무시
           FORCE_SEND: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: python daily_report.py

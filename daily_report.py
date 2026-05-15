@@ -1033,33 +1033,13 @@ def build_report() -> str:
 
 # ── 실행 ─────────────────────────────────────────────────────────
 
-# 10:00 ET ± SEND_WINDOW_MIN 안에서만 발송. GH Actions 크론 지연(보통 5~30분)을
-# 흡수하려고 50분으로 잡음. 두 크론(14/15 UTC)이 60분 간격이라 50분 이하여야
-# 한쪽만 fire 되는 게 보장됨.
-SEND_WINDOW_MIN = 50
-
-
 def should_skip_run() -> tuple[bool, str]:
-    """
-    미국 동부 시간 기준 장 오픈 후 30분(10:00 ET ± 30분) 시점인지 확인.
-    DST(EDT/EST)를 자동 처리.
-    GitHub Actions에서 cron 두 개(14 UTC, 15 UTC)를 등록하므로
-    그 중 하나만 실제 발송하기 위한 게이트.
-    """
     if os.getenv("FORCE_SEND") == "1":
         return False, "FORCE_SEND=1 (수동 실행)"
-
     now_et = datetime.now(ZoneInfo("America/New_York"))
     if now_et.weekday() >= 5:
         return True, f"주말 ({now_et:%a %H:%M ET})"
-
-    target_min = 10 * 60  # 10:00 ET
-    current_min = now_et.hour * 60 + now_et.minute
-    diff = current_min - target_min
-    if abs(diff) > SEND_WINDOW_MIN:
-        return True, f"발송 시간 아님 (현재 {now_et:%H:%M ET}, 목표 10:00 ±{SEND_WINDOW_MIN}분)"
-
-    return False, f"발송 시간 맞음 ({now_et:%H:%M ET})"
+    return False, f"실행 ({now_et:%H:%M ET})"
 
 
 def run_once(test_mode: bool = False):
