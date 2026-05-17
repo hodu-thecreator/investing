@@ -288,6 +288,55 @@ def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> s
     return "\n".join(lines)
 
 
+# ── 매수 구간 가이드 ─────────────────────────────────────────────
+
+def build_buy_zones(holdings: dict[str, float]) -> str:
+    """
+    보유 종목별 3단계 매수 구간 제시.
+      1차: 200일선 (첫 타점)
+      2차: 52주 고점 -20% (분할 추가)
+      3차: 52주 저점 +5% (대거 매수)
+    """
+    rows = []
+    for ticker, qty in holdings.items():
+        if not qty or qty <= 0:
+            continue
+        try:
+            df = fetch_stock_data(ticker, period="1y")
+            if df.empty or len(df) < 50:
+                continue
+            close = df["Close"].squeeze()
+            current = float(close.iloc[-1])
+            ma200 = float(close.rolling(min(200, len(close))).mean().iloc[-1])
+            high52 = float(close.max())
+            low52 = float(close.min())
+
+            z1 = round(ma200, 2)
+            z2 = round(high52 * 0.80, 2)   # 52주 고점 -20%
+            z3 = round(low52 * 1.05, 2)     # 52주 저점 +5%
+
+            def pct_from(target: float) -> str:
+                p = (target - current) / current * 100
+                return f"{p:+.1f}%"
+
+            rows.append((ticker, current, z1, z2, z3, pct_from(z1), pct_from(z2), pct_from(z3)))
+        except Exception:
+            continue
+
+    if not rows:
+        return ""
+
+    lines = ["<b>📉 매수 구간 (보유 종목)</b>"]
+    for ticker, cur, z1, z2, z3, p1, p2, p3 in rows:
+        lines.append(
+            f"  <b>{ticker}</b>  ${cur:.2f}\n"
+            f"    🟡 1차 ${z1}  ({p1})  · 200일선\n"
+            f"    🟠 2차 ${z2}  ({p2})  · 52주 고점 -20%\n"
+            f"    🔴 3차 ${z3}  ({p3})  · 52주 저점 근처"
+        )
+    return "\n".join(lines)
+
+
 # ── 레버리지 매수 가이드 ──────────────────────────────────────────
 
 # 본주 → 레버리지 ETF 매핑 (2x / 3x)
@@ -974,6 +1023,12 @@ def build_report() -> str:
     if lev_section:
         lines.append("\n" + "━" * 28)
         lines.append(lev_section)
+
+    # ── [4-b] 매수 구간 ──────────────────────────────────────────
+    buy_zone_section = build_buy_zones(holdings)
+    if buy_zone_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(buy_zone_section)
 
     # ── [5] 오늘의 동적 DCA 권장 금액 ─────────────────────────────
     base_dds = {}

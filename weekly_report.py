@@ -8,21 +8,98 @@
   3) 이번주 거래 요약 (매수/매도 횟수, 실현 손익)
   4) 다음주 주요 이벤트 5일치 미리보기
 """
-import json
 import os
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import yfinance as yf
 
 from config import Config
-from market_indicators import collect_all
+from market_indicators import collect_all, format_change_chip
 from telegram_notifier import send_message
 from events import collect_events
 from transactions import _load as _load_transactions
 from rebalancing import build_rebalance_section
+import ibkr_flex
 
 _config = Config()
+
+
+def _spy_period_return(hist, days: int) -> float | None:
+    """SPY 히스토리에서 days 거래일 전 대비 수익률(%)."""
+    if hist is None or hist.empty or len(hist) < 2:
+        return None
+    close = hist["Close"].squeeze()
+    current = float(close.iloc[-1])
+    idx = max(0, len(close) - days - 1)
+    past = float(close.iloc[idx])
+    return (current - past) / past * 100 if past else None
+
+
+def build_vs_spy_section(positions: dict) -> str:
+    """
+    IBKR positions를 기반으로 보유 종목 수익률 vs SPY 비교.
+    positions: {symbol: {qty, cost_basis, mark_price, unrealized_pnl}}
+    """
+    if not positions:
+        return ""
+
+    try:
+        spy_hist = yf.Ticker("SPY").history(period="3y")
+    except Exception:
+        spy_hist = None
+
+    spy_ytd = _spy_period_return(spy_hist, 252 // 12 * 12)  # ≈ 252 거래일
+    spy_ytd_label = f"SPY 1Y {spy_ytd:+.1f}%" if spy_ytd is not None else ""
+
+    # YTD: 올해 첫 거래일 기준
+    if spy_hist is not None and not spy_hist.empty:
+        close = spy_hist["Close"].squeeze()
+        year_start_idx = next(
+            (i for i, d in enumerate(spy_hist.index) if d.year == datetime.now().year),
+            0,
+        )
+        spy_ytd_val = (float(close.iloc[-1]) - float(close.iloc[year_start_idx])) / float(close.iloc[year_start_idx]) * 100
+    else:
+        spy_ytd_val = None
+
+    lines = ["<b>📊 보유 종목 수익률 vs S&P500</b>"]
+
+    if spy_ytd_val is not None:
+        emoji = "🟢" if spy_ytd_val >= 0 else "🔴"
+        lines.append(f"  {emoji} SPY YTD  <b>{spy_ytd_val:+.1f}%</b>  (벤치마크)")
+
+    rows = []
+    total_cost = total_pnl = 0.0
+    for sym, d in positions.items():
+        cost = d["cost_basis"] * d["qty"]
+        pnl  = d["unrealized_pnl"]
+        if cost <= 0:
+            continue
+        ret = pnl / cost * 100
+        rows.append((sym, ret, pnl, cost))
+        total_cost += cost
+        total_pnl  += pnl
+
+    rows.sort(key=lambda x: -x[1])
+    for sym, ret, pnl, cost in rows:
+        emoji = "🟢" if ret >= 0 else "🔴"
+        vs = ""
+        if spy_ytd_val is not None:
+            diff = ret - spy_ytd_val
+            vs = f"  (SPY 대비 {diff:+.1f}%p)"
+        lines.append(f"  {emoji} <b>{sym}</b>  {ret:+.1f}%  (${pnl:+,.0f}){vs}")
+
+    if total_cost > 0:
+        total_ret = total_pnl / total_cost * 100
+        emoji = "🟢" if total_ret >= 0 else "🔴"
+        vs = ""
+        if spy_ytd_val is not None:
+            diff = total_ret - spy_ytd_val
+            vs_emoji = "🟢" if diff >= 0 else "🔴"
+            vs = f"\n  {vs_emoji} SPY 대비 <b>{diff:+.1f}%p</b> {'초과' if diff >= 0 else '미달'}"
+        lines.append(f"\n  {emoji} 포트폴리오 평균  <b>{total_ret:+.1f}%</b>  (${total_pnl:+,.0f}){vs}")
+
+    return "\n".join(lines)
 
 
 def weekly_return(ticker: str) -> dict | None:
@@ -88,6 +165,7 @@ def build_weekly_report() -> str:
     lines = [f"<b>📅 주간 마감 리포트</b>  {now}"]
     lines.append("━" * 28)
 
+    holdings, _, _ibkr = ibkr_flex.resolve_holdings_and_cash(_config)
     indicators = collect_all()
 
     # ── 거시 지표 1주일 변동 ─────────────────────────────────────
@@ -113,7 +191,7 @@ def build_weekly_report() -> str:
     # ── 보유 종목 주간 수익률 ────────────────────────────────────
     lines.append("\n<b>💼 보유 종목 주간 수익률</b>")
     rows = []
-    for ticker, qty in _config.HOLDINGS.items():
+    for ticker, qty in holdings.items():
         if not qty or qty <= 0:
             continue
         wr = weekly_return(ticker)
@@ -125,17 +203,22 @@ def build_weekly_report() -> str:
     if rows:
         for ticker, wr in rows:
             emoji = "🟢" if wr["return_pct"] >= 0 else "🔴"
-            sign = "+" if wr["return_pct"] >= 0 else ""
             lines.append(
                 f"  {emoji} <b>{ticker}</b>  ${wr['current']:.2f}  "
-                f"<b>{sign}{wr['return_pct']:.2f}%</b>"
+                f"<b>{wr['return_pct']:+.2f}%</b>"
             )
-
         avg_ret = sum(r[1]["return_pct"] for r in rows) / len(rows)
         avg_emoji = "🟢" if avg_ret >= 0 else "🔴"
         lines.append(f"\n  평균 수익률  {avg_emoji} <b>{avg_ret:+.2f}%</b>")
     else:
         lines.append("  데이터 없음")
+
+    # ── 포트폴리오 vs S&P500 ──────────────────────────────────────
+    if _ibkr["error"] is None and _ibkr["positions"]:
+        vs_section = build_vs_spy_section(_ibkr["positions"])
+        if vs_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(vs_section)
 
     # ── 이번주 거래 요약 ──────────────────────────────────────────
     trades = this_week_trades()
@@ -158,7 +241,7 @@ def build_weekly_report() -> str:
         print(f"[weekly] rebalance 오류: {e}")
 
     # ── 다음주 이벤트 5일 미리보기 ────────────────────────────────
-    upcoming = collect_events(_config.HOLDINGS, days_ahead=5)
+    upcoming = collect_events(holdings, days_ahead=5)
     if upcoming:
         lines.append("\n<b>📅 다음주 주요 일정 (5일)</b>")
         for d, kind, label in upcoming[:8]:
