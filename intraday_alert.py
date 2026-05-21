@@ -52,14 +52,18 @@ def _prune_old_keys(state: dict):
             del state[key]
 
 
-def _fetch_news_headlines(limit: int = 3) -> list[str]:
+def _fetch_news_headlines(limit: int = 3) -> list[dict]:
+    """{title, link, publisher} 형태로 뉴스 반환."""
     try:
         from daily_report import fetch_market_news
-        items = fetch_market_news()
-        return [n.get("title", "")[:90] for n in items[:limit] if n.get("title")]
+        return fetch_market_news()[:limit]
     except Exception as e:
         print(f"[intraday] news fetch failed: {e}")
         return []
+
+
+def _html_escape(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
@@ -81,8 +85,13 @@ def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
     headlines = _fetch_news_headlines()
     if headlines:
         lines.append("\n<b>📰 헤드라인 (왜 떨어졌나)</b>")
-        for h in headlines:
-            lines.append(f"  • {h}")
+        for n in headlines:
+            title = _html_escape(n["title"][:100])
+            pub = f" <i>({_html_escape(n['publisher'])})</i>" if n.get("publisher") else ""
+            if n.get("link"):
+                lines.append(f"  • <a href=\"{n['link']}\">{title}</a>{pub}")
+            else:
+                lines.append(f"  • {title}{pub}")
 
     lines.append("\n<b>💡 대응 가이드</b>")
     if tier <= -5:

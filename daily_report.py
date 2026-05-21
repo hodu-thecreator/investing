@@ -471,6 +471,30 @@ def build_leverage_guide(available_cash: float) -> str:
 
 # ── 시장 뉴스 수집 + Claude 코멘터리 ────────────────────────────
 
+def _extract_news_item(item: dict) -> dict | None:
+    """yfinance 뉴스 항목에서 title/link/publisher/summary 추출 (구/신 포맷 모두 지원)."""
+    content = item.get("content") if isinstance(item.get("content"), dict) else None
+    src = content or item
+
+    title = src.get("title") or item.get("title")
+    if not title:
+        return None
+
+    link = item.get("link")
+    if not link and isinstance(src.get("canonicalUrl"), dict):
+        link = src["canonicalUrl"].get("url")
+    if not link and isinstance(src.get("clickThroughUrl"), dict):
+        link = src["clickThroughUrl"].get("url")
+
+    publisher = item.get("publisher") or ""
+    if not publisher and isinstance(src.get("provider"), dict):
+        publisher = src["provider"].get("displayName", "")
+
+    summary = (src.get("summary") or item.get("summary") or "")[:120]
+
+    return {"title": title, "link": link or "", "publisher": publisher, "summary": summary}
+
+
 def fetch_market_news() -> list[dict]:
     """yfinance로 주요 지수 관련 최신 뉴스 수집"""
     news_items = []
@@ -478,13 +502,11 @@ def fetch_market_news() -> list[dict]:
     for sym in ["SPY", "QQQ"]:
         try:
             for item in (yf.Ticker(sym).news or [])[:6]:
-                title = item.get("title", "")
-                if title and title not in seen:
-                    seen.add(title)
-                    news_items.append({
-                        "title": title,
-                        "summary": item.get("summary", "")[:120],
-                    })
+                n = _extract_news_item(item)
+                if not n or n["title"] in seen:
+                    continue
+                seen.add(n["title"])
+                news_items.append(n)
         except Exception:
             pass
     return news_items[:8]
