@@ -288,6 +288,55 @@ def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> s
     return "\n".join(lines)
 
 
+# ── 매수 구간 가이드 ─────────────────────────────────────────────
+
+def build_buy_zones(holdings: dict[str, float]) -> str:
+    """
+    보유 종목별 3단계 매수 구간 제시.
+      1차: 200일선 (첫 타점)
+      2차: 52주 고점 -20% (분할 추가)
+      3차: 52주 저점 +5% (대거 매수)
+    """
+    rows = []
+    for ticker, qty in holdings.items():
+        if not qty or qty <= 0:
+            continue
+        try:
+            df = fetch_stock_data(ticker, period="1y")
+            if df.empty or len(df) < 50:
+                continue
+            close = df["Close"].squeeze()
+            current = float(close.iloc[-1])
+            ma200 = float(close.rolling(min(200, len(close))).mean().iloc[-1])
+            high52 = float(close.max())
+            low52 = float(close.min())
+
+            z1 = round(ma200, 2)
+            z2 = round(high52 * 0.80, 2)   # 52주 고점 -20%
+            z3 = round(low52 * 1.05, 2)     # 52주 저점 +5%
+
+            def pct_from(target: float) -> str:
+                p = (target - current) / current * 100
+                return f"{p:+.1f}%"
+
+            rows.append((ticker, current, z1, z2, z3, pct_from(z1), pct_from(z2), pct_from(z3)))
+        except Exception:
+            continue
+
+    if not rows:
+        return ""
+
+    lines = ["<b>📉 매수 구간 (보유 종목)</b>"]
+    for ticker, cur, z1, z2, z3, p1, p2, p3 in rows:
+        lines.append(
+            f"  <b>{ticker}</b>  ${cur:.2f}\n"
+            f"    🟡 1차 ${z1}  ({p1})  · 200일선\n"
+            f"    🟠 2차 ${z2}  ({p2})  · 52주 고점 -20%\n"
+            f"    🔴 3차 ${z3}  ({p3})  · 52주 저점 근처"
+        )
+    return "\n".join(lines)
+
+
 # ── 레버리지 매수 가이드 ──────────────────────────────────────────
 
 # 본주 → 레버리지 ETF 매핑 (2x / 3x)
@@ -422,6 +471,30 @@ def build_leverage_guide(available_cash: float) -> str:
 
 # ── 시장 뉴스 수집 + Claude 코멘터리 ────────────────────────────
 
+def _extract_news_item(item: dict) -> dict | None:
+    """yfinance 뉴스 항목에서 title/link/publisher/summary 추출 (구/신 포맷 모두 지원)."""
+    content = item.get("content") if isinstance(item.get("content"), dict) else None
+    src = content or item
+
+    title = src.get("title") or item.get("title")
+    if not title:
+        return None
+
+    link = item.get("link")
+    if not link and isinstance(src.get("canonicalUrl"), dict):
+        link = src["canonicalUrl"].get("url")
+    if not link and isinstance(src.get("clickThroughUrl"), dict):
+        link = src["clickThroughUrl"].get("url")
+
+    publisher = item.get("publisher") or ""
+    if not publisher and isinstance(src.get("provider"), dict):
+        publisher = src["provider"].get("displayName", "")
+
+    summary = (src.get("summary") or item.get("summary") or "")[:120]
+
+    return {"title": title, "link": link or "", "publisher": publisher, "summary": summary}
+
+
 def fetch_market_news() -> list[dict]:
     """yfinance로 주요 지수 관련 최신 뉴스 수집"""
     news_items = []
@@ -429,13 +502,11 @@ def fetch_market_news() -> list[dict]:
     for sym in ["SPY", "QQQ"]:
         try:
             for item in (yf.Ticker(sym).news or [])[:6]:
-                title = item.get("title", "")
-                if title and title not in seen:
-                    seen.add(title)
-                    news_items.append({
-                        "title": title,
-                        "summary": item.get("summary", "")[:120],
-                    })
+                n = _extract_news_item(item)
+                if not n or n["title"] in seen:
+                    continue
+                seen.add(n["title"])
+                news_items.append(n)
         except Exception:
             pass
     return news_items[:8]
@@ -974,6 +1045,12 @@ def build_report() -> str:
     if lev_section:
         lines.append("\n" + "━" * 28)
         lines.append(lev_section)
+
+    # ── [4-b] 매수 구간 ──────────────────────────────────────────
+    buy_zone_section = build_buy_zones(holdings)
+    if buy_zone_section:
+        lines.append("\n" + "━" * 28)
+        lines.append(buy_zone_section)
 
     # ── [5] 오늘의 동적 DCA 권장 금액 ─────────────────────────────
     base_dds = {}

@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""
+장중 급락 알림 — bot_polling(매분 실행)에 끼워서 동작.
+
+미국장 시간(9:30~16:00 ET) 동안 SPY/QQQ가 전일 종가 대비 2/3/5% 이상 하락하면
+한 번씩 텔레그램 알림. 보유 종목 중 3%+ 하락 종목도 함께 표시.
+뉴스 헤드라인 + 매수 가이드 포함 — 자다가 폰 진동으로 깨도 바로 판단 가능.
+"""
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import yfinance as yf
+
+from telegram_notifier import send_message
+
+INDICES = [("SPY", "S&P500"), ("QQQ", "나스닥100")]
+DROP_TIERS = [-5, -3, -2]
+COOLDOWN_SEC = 600
+INDEX_THRESHOLD = -2.0
+HOLDING_THRESHOLD = -3.0
+
+
+def _is_market_hours() -> bool:
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:
+        return False
+    minutes = now_et.hour * 60 + now_et.minute
+    return 570 <= minutes <= 960  # 9:30 ~ 16:00 ET
+
+
+def _intraday_change(ticker: str) -> tuple[float | None, float | None]:
+    try:
+        t = yf.Ticker(ticker)
+        daily = t.history(period="2d", interval="1d")
+        if len(daily) < 2:
+            return None, None
+        prev_close = float(daily["Close"].iloc[-2])
+        intraday = t.history(period="1d", interval="5m")
+        if intraday.empty:
+            return None, None
+        current = float(intraday["Close"].iloc[-1])
+        return current, (current - prev_close) / prev_close * 100
+    except Exception:
+        return None, None
+
+
+def _prune_old_keys(state: dict):
+    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    for key in list(state.keys()):
+        if key.startswith("intraday_") and key not in (f"intraday_{today}", "intraday_last_check"):
+            del state[key]
+
+
+def _fetch_news_headlines(limit: int = 3) -> list[dict]:
+    """{title, link, publisher} 형태로 뉴스 반환."""
+    try:
+        from daily_report import fetch_market_news
+        return fetch_market_news()[:limit]
+    except Exception as e:
+        print(f"[intraday] news fetch failed: {e}")
+        return []
+
+
+def _html_escape(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
+    now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%H:%M KST")
+    now_et  = datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M ET")
+    sev = "🚨🚨" if tier <= -5 else "🚨" if tier <= -3 else "⚠️"
+    lines = [f"<b>{sev} 미국 장중 급락 알림</b>  {now_kst} ({now_et})"]
+    lines.append("━" * 28)
+
+    lines.append("\n<b>📉 주요 지수</b>")
+    for sym, name, price, chg in idx_drops:
+        lines.append(f"  🔴 <b>{name}</b>  ${price:.2f}  <b>{chg:+.2f}%</b>")
+
+    if hold_drops:
+        lines.append("\n<b>💼 보유 종목 급락 (-3%+)</b>")
+        for ticker, price, chg in hold_drops:
+            lines.append(f"  🔴 <b>{ticker}</b>  ${price:.2f}  <b>{chg:+.2f}%</b>")
+
+    headlines = _fetch_news_headlines()
+    if headlines:
+        lines.append("\n<b>📰 헤드라인 (왜 떨어졌나)</b>")
+        for n in headlines:
+            title = _html_escape(n["title"][:100])
+            pub = f" <i>({_html_escape(n['publisher'])})</i>" if n.get("publisher") else ""
+            if n.get("link"):
+                lines.append(f"  • <a href=\"{n['link']}\">{title}</a>{pub}")
+            else:
+                lines.append(f"  • {title}{pub}")
+
+    lines.append("\n<b>💡 대응 가이드</b>")
+    if tier <= -5:
+        lines.append("  • 패닉 매도 금지. 5단계 분할 매수로 진입")
+        lines.append("  • 가용현금의 5~10% 1차 진입 검토")
+    elif tier <= -3:
+        lines.append("  • 보유 종목 매수 구간 도달 여부 확인")
+        lines.append("  • 가용현금의 3% 분할 매수 검토")
+    else:
+        lines.append("  • 일반 조정. 1차 매수 구간(200일선) 모니터링")
+        lines.append("  • 추가 하락 시 분할 진입")
+
+    lines.append("\n" + "━" * 28)
+    lines.append("🤖 <i>yfinance 데이터 (최대 15분 지연 가능)</i>")
+    return "\n".join(lines)
+
+
+def check_and_alert(state: dict, holdings: dict) -> bool:
+    """급락 감지 + 알림. state는 inline mutate. 알림 발송 시 True."""
+    if not _is_market_hours():
+        return False
+
+    now_ts = time.time()
+    if now_ts - state.get("intraday_last_check", 0) < COOLDOWN_SEC:
+        return False
+    state["intraday_last_check"] = now_ts
+    _prune_old_keys(state)
+
+    idx_drops = []
+    for sym, name in INDICES:
+        price, chg = _intraday_change(sym)
+        if chg is not None and chg <= INDEX_THRESHOLD:
+            idx_drops.append((sym, name, price, chg))
+
+    if not idx_drops:
+        return False
+
+    worst = min(d[3] for d in idx_drops)
+    tier = next((t for t in DROP_TIERS if worst <= t), None)
+    if tier is None:
+        return False
+
+    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    alerted_key = f"intraday_{today}"
+    alerted = state.get(alerted_key, [])
+    if tier in alerted:
+        return False
+
+    hold_drops = []
+    for ticker, qty in (holdings or {}).items():
+        if not qty or qty <= 0:
+            continue
+        price, chg = _intraday_change(ticker)
+        if chg is not None and chg <= HOLDING_THRESHOLD:
+            hold_drops.append((ticker, price, chg))
+    hold_drops.sort(key=lambda x: x[2])
+
+    msg = _build_alert(idx_drops, hold_drops, tier)
+    if not send_message(msg):
+        return False
+
+    state[alerted_key] = alerted + [tier]
+    return True
