@@ -507,7 +507,17 @@ def main():
 
     if updates:
         state["offset"] = offset
-        _save_state(state)
+
+    # ── 장중 급락 알림 (미국장 시간 + 10분 throttle 내부에서 처리) ──
+    try:
+        import intraday_alert
+        holdings, _, _ = ibkr_flex.resolve_holdings_and_cash(_config)
+        if intraday_alert.check_and_alert(state, holdings):
+            print(f"[{datetime.now():%H:%M:%S}] 장중 급락 알림 발송")
+    except Exception as e:
+        print(f"[intraday] 오류: {e}")
+
+    _save_state(state)
 
 
 if __name__ == "__main__":
