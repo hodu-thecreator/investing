@@ -59,28 +59,32 @@ def _earnings_date(ticker: str) -> date | None:
     return None
 
 
-def _ex_div_info(ticker: str) -> tuple[date | None, float | None]:
+def _ex_div_info(ticker: str) -> dict:
+    """배당락일 + 지급일 + 마지막 배당금."""
     try:
         info = yf.Ticker(ticker).info
-        d = _safe_date(info.get("exDividendDate"))
-        amt = info.get("lastDividendValue") or info.get("dividendRate")
-        return d, (float(amt) if amt else None)
+        return {
+            "ex_date":  _safe_date(info.get("exDividendDate")),
+            "pay_date": _safe_date(info.get("dividendDate")),
+            "amount":   float(info["lastDividendValue"]) if info.get("lastDividendValue") else None,
+        }
     except Exception:
-        return None, None
+        return {"ex_date": None, "pay_date": None, "amount": None}
 
 
 def _ex_div_date(ticker: str) -> date | None:
-    return _ex_div_info(ticker)[0]
+    return _ex_div_info(ticker)["ex_date"]
 
 
 def _ticker_events(ticker: str) -> dict:
     """단일 종목 실적·배당 fetch (병렬 호출용)."""
-    div_date, div_amt = _ex_div_info(ticker)
+    div = _ex_div_info(ticker)
     return {
-        "ticker":     ticker,
-        "earnings":   _earnings_date(ticker),
-        "div_date":   div_date,
-        "div_amount": div_amt,
+        "ticker":       ticker,
+        "earnings":     _earnings_date(ticker),
+        "div_date":     div["ex_date"],
+        "div_pay_date": div["pay_date"],
+        "div_amount":   div["amount"],
     }
 
 
@@ -117,6 +121,37 @@ def collect_events(holdings: dict[str, float], days_ahead: int = 14) -> list[tup
 
     items.sort(key=lambda x: x[0])
     return items
+
+
+def get_dividend_schedule(holdings: dict[str, float], days_ahead: int = 90) -> list[dict]:
+    """보유 종목 다가오는 배당 일정 (배당락 + 지급일 + 수량×금액)."""
+    today = datetime.now().date()
+    horizon = today + timedelta(days=days_ahead)
+    out = []
+    for ev in _fetch_holdings_events(holdings):
+        ex = ev["div_date"]
+        pay = ev["div_pay_date"]
+        if not ex:
+            continue
+        # 배당락 horizon 이내 OR 배당락은 지났지만 지급일 미래
+        in_window = (today <= ex <= horizon) or (pay and ex < today <= pay)
+        if not in_window:
+            continue
+        qty = holdings.get(ev["ticker"], 0) or 0
+        per_share = ev["div_amount"]
+        total = (per_share * qty) if (per_share and qty) else None
+        out.append({
+            "ticker":        ev["ticker"],
+            "ex_date":       ex,
+            "pay_date":      pay,
+            "amount":        per_share,
+            "qty":           qty,
+            "total":         total,
+            "ex_days_left":  (ex - today).days,
+            "pay_days_left": (pay - today).days if pay else None,
+        })
+    out.sort(key=lambda x: x["ex_date"])
+    return out
 
 
 def get_upcoming_dividends(holdings: dict[str, float], days_ahead: int = 7) -> list[dict]:

@@ -22,7 +22,7 @@ from market_indicators import collect_all, get_nzd_krw_cross, format_change_chip
 from telegram_notifier import send_message
 from config import Config
 from dca_calculator import build_dca_section
-from events import build_calendar_section
+from events import build_calendar_section, get_dividend_schedule
 from rebalancing import check_drifts, calc_portfolio_state
 import ibkr_flex
 
@@ -836,6 +836,192 @@ def judge_ticker(ticker: str, mkt_score: int) -> dict:
     }
 
 
+# ── 지표 → 액션 태그 ────────────────────────────────────────────
+
+def _indicator_action(name: str, value) -> str:
+    """지표명+값에 따른 한 줄 액션 태그. 빈 문자열이면 표시 생략."""
+    if value is None:
+        return ""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if name == "fear_greed":
+        if v <= 24: return "  → 적극 매수"
+        if v <= 49: return "  → 분할 매수 우호"
+        if v >= 75: return "  → 일부 차익 검토"
+        if v >= 55: return "  → 신규 진입 자제"
+    elif name == "vix":
+        if v >= 30: return "  → 패닉, 매수 기회"
+        if v >= 20: return "  → 변동성↑ 분할"
+    elif name == "aaii_bullish":
+        if v >= 55: return "  → 역지표, 매도 검토"
+        if v <= 30: return "  → 역지표, 매수 우호"
+    elif name == "put_call":
+        if v >= 1.20: return "  → 과매도, 매수 우호"
+        if v < 0.70:  return "  → 과매수, 자제"
+    elif name == "breadth_200":
+        if v >= 70: return "  → 과열"
+        if v <= 30: return "  → 바닥 신호"
+    elif name == "buffett":
+        if v >= 180: return "  → 거품, 방어"
+    elif name == "credit_spread":
+        if v >= 5.0: return "  → 위험, 현금↑"
+    elif name == "yield_curve":
+        if v < 0: return "  → 침체 신호"
+    return ""
+
+
+# ── 배당 일정 섹션 (배당락일 + 입금예정일) ──────────────────────
+
+def build_dividend_schedule_section(holdings: dict, days_ahead: int = 90) -> str:
+    sched = get_dividend_schedule(holdings, days_ahead=days_ahead)
+    if not sched:
+        return ""
+
+    lines = [f"<b>📅 배당 일정 ({days_ahead}일 이내)</b>"]
+    total_sum = 0.0
+    for d in sched:
+        ex_diff = d["ex_days_left"]
+        ex_tag = "오늘" if ex_diff == 0 else "내일" if ex_diff == 1 else (
+            f"D-{ex_diff}" if ex_diff > 0 else f"D+{abs(ex_diff)}"
+        )
+        ex_str = f"{d['ex_date']:%m/%d}"
+
+        if d["pay_date"]:
+            pay_diff = d["pay_days_left"]
+            pay_tag = "오늘" if pay_diff == 0 else (
+                f"D-{pay_diff}" if pay_diff > 0 else f"D+{abs(pay_diff)}"
+            )
+            pay_str = f"{d['pay_date']:%m/%d}"
+            pay_part = f"입금 {pay_str} ({pay_tag})"
+        else:
+            pay_part = "입금 미정"
+
+        amt = ""
+        if d["amount"]:
+            if d["total"]:
+                amt = f"  +${d['total']:.2f}  <i>(${d['amount']:.4f}×{d['qty']:g})</i>"
+                total_sum += d["total"]
+            else:
+                amt = f"  ${d['amount']:.4f}/주"
+
+        marker = "💵" if (d["pay_date"] and d["pay_days_left"] is not None and d["pay_days_left"] >= 0) else "•"
+        lines.append(
+            f"  {marker} <b>{d['ticker']}</b>  배당락 {ex_str} ({ex_tag})  {pay_part}{amt}"
+        )
+
+    if total_sum > 0:
+        lines.append(f"\n  💰 <b>{days_ahead}일 예상 총 배당  +${total_sum:.2f}</b>")
+    return "\n".join(lines)
+
+
+# ── 오늘의 액션 플랜 ────────────────────────────────────────────
+
+def build_action_plan(
+    indicators: dict,
+    mkt_score: int,
+    risk_score: int,
+    available_cash: float,
+    drifts: list,
+    extreme_overheat: list,
+    buy_count: int,
+) -> str:
+    """모든 시그널을 종합해 우선순위 액션 2-3개 도출."""
+    fg  = indicators.get("fear_greed", {})
+    vix = indicators.get("vix", {})
+    fg_score  = fg.get("score") if not fg.get("error") else None
+    vix_val   = vix.get("current") if not vix.get("error") else None
+
+    actions = []
+
+    # 1) VIX 패닉 = 최우선
+    if vix_val is not None and vix_val >= 30:
+        amt = available_cash * 0.20
+        actions.append((
+            "⭐⭐⭐", "패닉 매수 기회",
+            [
+                f"VIX {vix_val} — 극단 변동성",
+                f"가용현금 ${available_cash:,.0f} 중 20% (${amt:,.0f}) 1차 진입",
+                "5단계 분할로 추가 하락 대비",
+            ],
+        ))
+
+    # 2) 공포/탐욕 극단 공포 = 매수
+    if fg_score is not None and fg_score <= 24:
+        amt = available_cash * 0.30
+        actions.append((
+            "⭐⭐⭐", "극단 공포 — 적극 매수 구간",
+            [
+                f"공포/탐욕 {fg_score} — 역지표 매수 신호",
+                f"가용현금 ${available_cash:,.0f} 중 30% (${amt:,.0f}) 분할 매수",
+                f"우선 후보: 매수 리스트({buy_count}개) 확인",
+            ],
+        ))
+
+    # 3) 매수 우호 (mkt_score ≥ 3)
+    elif mkt_score >= 3:
+        size_pct = 20 if mkt_score >= 6 else 10
+        amt = available_cash * (size_pct / 100)
+        actions.append((
+            "⭐⭐" if mkt_score >= 6 else "⭐", "매수 우호 구간",
+            [
+                f"시장 점수 +{mkt_score} — 매수 시그널",
+                f"가용현금 {size_pct}% (${amt:,.0f}) 분할 매수 검토",
+                f"매수 리스트({buy_count}개) 중 200일선 근접 종목 우선",
+            ],
+        ))
+
+    # 4) 거시 위험 (risk_score ≥ 7)
+    if risk_score >= 7:
+        actions.append((
+            "⚠️", "거시 위험 — 방어 자세",
+            [
+                f"위험점수 {risk_score} — 침체/거품 신호",
+                "신규 매수 자제, 현금 비중 확대",
+                "차익 실현 후보 점검 (RSI 70+ 종목)",
+            ],
+        ))
+
+    # 5) 극단 과열 — 차익 실현
+    if extreme_overheat:
+        actions.append((
+            "🔴", "차익 실현 검토",
+            [
+                f"과열 종목 {len(extreme_overheat)}개 — 일부 매도 고려",
+                "10-20% 부분 매도로 리스크 축소",
+            ],
+        ))
+
+    # 6) 리밸런싱
+    if drifts:
+        d = drifts[0]
+        actions.append((
+            "⚖️", "리밸런싱 필요",
+            [
+                f"{d['category']} 드리프트 {d['drift_pct']:+.1f}%p",
+                "타깃 비중으로 복원 검토",
+            ],
+        ))
+
+    # 7) 시그널 약함 = 중립
+    if not actions:
+        actions.append((
+            "⏸", "특별한 액션 없음",
+            [
+                "정기 DCA만 진행, 신규 진입 보류",
+                "관찰 모드 — 지표 변동 모니터링",
+            ],
+        ))
+
+    lines = ["<b>🎯 오늘의 액션 플랜</b>"]
+    for i, (prio, title, details) in enumerate(actions[:4], 1):
+        lines.append(f"\n{i}️⃣  {prio}  <b>{title}</b>")
+        for det in details:
+            lines.append(f"   • {det}")
+    return "\n".join(lines)
+
+
 # ── 리포트 빌더 ──────────────────────────────────────────────────
 
 def build_report() -> str:
@@ -862,27 +1048,32 @@ def build_report() -> str:
         if fg.get("week_ago"):
             diff = fg["score"] - fg["week_ago"]
             trend = f"  {'↑' if diff > 0 else '↓'}{abs(diff):.0f} (1주 전 {fg['week_ago']})"
-        lines.append(f"  공포/탐욕  <b>{fg['score']}</b> {fg.get('rating','')}{trend}")
+        tag = _indicator_action("fear_greed", fg.get("score"))
+        lines.append(f"  공포/탐욕  <b>{fg['score']}</b> {fg.get('rating','')}{trend}{tag}")
 
     vix = indicators.get("vix", {})
     if not vix.get("error"):
         chg = f"{'↑' if vix['change'] > 0 else '↓'}{abs(vix['change'])}"
-        lines.append(f"  VIX        <b>{vix['current']}</b> {chg}  |  {vix['level']}")
+        tag = _indicator_action("vix", vix.get("current"))
+        lines.append(f"  VIX        <b>{vix['current']}</b> {chg}  |  {vix['level']}{tag}")
 
     aaii = indicators.get("aaii", {})
     if not aaii.get("error") and aaii.get("bullish") is not None:
+        tag = _indicator_action("aaii_bullish", aaii["bullish"])
         lines.append(
-            f"  AAII       강세 {aaii['bullish']:.0f}%  중립 {aaii.get('neutral',0):.0f}%  약세 {aaii['bearish']:.0f}%"
+            f"  AAII       강세 {aaii['bullish']:.0f}%  중립 {aaii.get('neutral',0):.0f}%  약세 {aaii['bearish']:.0f}%{tag}"
         )
 
     pc = indicators.get("put_call", {})
     if not pc.get("error"):
-        lines.append(f"  Put/Call   {pc['current']}  ({pc['level']})")
+        tag = _indicator_action("put_call", pc.get("current"))
+        lines.append(f"  Put/Call   {pc['current']}  ({pc['level']}){tag}")
 
     breadth = indicators.get("breadth", {})
     if not breadth.get("error"):
+        tag = _indicator_action("breadth_200", breadth.get("pct_above_200"))
         lines.append(
-            f"  섹터 MA    50일선 위 {breadth['pct_above_50']}%  |  200일선 위 {breadth['pct_above_200']}%"
+            f"  섹터 MA    50일선 위 {breadth['pct_above_50']}%  |  200일선 위 {breadth['pct_above_200']}%{tag}"
         )
 
     fed = indicators.get("fed_rate", {})
@@ -911,11 +1102,14 @@ def build_report() -> str:
 
     macro_lines = []
     if not buffett.get("error"):
-        macro_lines.append(f"  버핏지수      <b>{buffett['value']:.0f}%</b>  {buffett['level']}")
+        tag = _indicator_action("buffett", buffett.get("value"))
+        macro_lines.append(f"  버핏지수      <b>{buffett['value']:.0f}%</b>  {buffett['level']}{tag}")
     if not spread.get("error"):
-        macro_lines.append(f"  신용스프레드  {spread['value']}%  {spread['level']}")
+        tag = _indicator_action("credit_spread", spread.get("value"))
+        macro_lines.append(f"  신용스프레드  {spread['value']}%  {spread['level']}{tag}")
     if not yc.get("error"):
-        macro_lines.append(f"  장단기금리차  {yc['value']:+.2f}%  {yc['level']}")
+        tag = _indicator_action("yield_curve", yc.get("value"))
+        macro_lines.append(f"  장단기금리차  {yc['value']:+.2f}%  {yc['level']}{tag}")
 
     if macro_lines:
         lines.append("")
@@ -1077,9 +1271,10 @@ def build_report() -> str:
         lines.append(cal_section)
 
     # ── [7] 리밸런싱 알림 (드리프트 ±5%p 초과 시만) ──────────────
+    drifts: list = []
     try:
         reb_state = calc_portfolio_state(holdings, idle_cash) if _ibkr_ok else None
-        drifts = check_drifts(state=reb_state)
+        drifts = check_drifts(state=reb_state) or []
         if drifts:
             lines.append("\n" + "━" * 28)
             lines.append("<b>⚖️ 리밸런싱 알림</b>")
@@ -1101,6 +1296,28 @@ def build_report() -> str:
     if div_section:
         lines.append("\n" + "━" * 28)
         lines.append(div_section)
+
+    # ── [9] 배당 일정 (배당락일 + 입금예정일) ─────────────────────
+    div_sched = build_dividend_schedule_section(holdings, days_ahead=90)
+    if div_sched:
+        lines.append("\n" + "━" * 28)
+        lines.append(div_sched)
+
+    # ── [10] 오늘의 액션 플랜 ─────────────────────────────────────
+    try:
+        plan = build_action_plan(
+            indicators=indicators,
+            mkt_score=mkt_score,
+            risk_score=risk_score,
+            available_cash=available_cash,
+            drifts=drifts,
+            extreme_overheat=extreme_overheat_list,
+            buy_count=len(buy_list),
+        )
+        lines.append("\n" + "━" * 28)
+        lines.append(plan)
+    except Exception as e:
+        print(f"[action_plan] {e}")
 
     lines.append("\n" + "━" * 28)
     lines.append("🤖 <i>Stock Agent — 평일 미국 장 오픈 후 30분 자동 발송 (DST 자동 반영)</i>")
