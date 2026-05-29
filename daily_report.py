@@ -287,23 +287,39 @@ def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> s
 
 # ── 추가매수 없는 홀딩 전용 / 레버리지 전략 전용 종목 ────────────
 
-# 추가매수 계획 없음 — 홀딩 전용
 _NO_ADD_BUY = {"QQQI", "SPYI"}
 
-# 본주 → 레버리지 전략 (하락 시 레버 매수, 본주 추가매수 안 함)
+# 본주별 단계적 레버리지 전략
+# etfs: [(ticker, 비중)] — 비중 합산 1.0
 _LEV_STRATEGY = {
-    "QQQM": {"lev3x": "TQQQ", "lev2x": "QLD",  "name": "나스닥100"},
-    "SPYM": {"lev3x": "UPRO", "lev2x": "SSO",   "name": "S&P500"},
-    "SOXQ": {"lev3x": "SOXL", "lev2x": None,    "name": "반도체"},
+    "QQQM": {
+        "name": "나스닥100",
+        "tiers": [
+            {"drop": -5,  "label": "1차", "lev": "~1.5x", "etfs": [("QLD",  1.0)],                 "ratio": 0.10},
+            {"drop": -10, "label": "2차", "lev": "2x",    "etfs": [("QLD",  1.0)],                 "ratio": 0.20},
+            {"drop": -15, "label": "3차", "lev": "2.5x",  "etfs": [("QLD",  0.5), ("TQQQ", 0.5)], "ratio": 0.35},
+            {"drop": -20, "label": "4차", "lev": "3x",    "etfs": [("TQQQ", 1.0)],                 "ratio": 0.50},
+        ],
+    },
+    "SPYM": {
+        "name": "S&P500",
+        "tiers": [
+            {"drop": -5,  "label": "1차", "lev": "~1.5x", "etfs": [("SSO",  1.0)],                 "ratio": 0.10},
+            {"drop": -10, "label": "2차", "lev": "2x",    "etfs": [("SSO",  1.0)],                 "ratio": 0.20},
+            {"drop": -15, "label": "3차", "lev": "2.5x",  "etfs": [("SSO",  0.5), ("UPRO", 0.5)], "ratio": 0.35},
+            {"drop": -20, "label": "4차", "lev": "3x",    "etfs": [("UPRO", 1.0)],                 "ratio": 0.50},
+        ],
+    },
+    "SOXQ": {
+        "name": "반도체",
+        "tiers": [
+            {"drop": -10, "label": "1차", "lev": "3x",    "etfs": [("SOXL", 1.0)], "ratio": 0.10},
+            {"drop": -15, "label": "2차", "lev": "3x",    "etfs": [("SOXL", 1.0)], "ratio": 0.20},
+            {"drop": -20, "label": "3차", "lev": "3x",    "etfs": [("SOXL", 1.0)], "ratio": 0.35},
+            {"drop": -25, "label": "4차", "lev": "3x",    "etfs": [("SOXL", 1.0)], "ratio": 0.50},
+        ],
+    },
 }
-
-# 낙폭별 분할 비중: (낙폭 임계값, 가용현금 대비 비율, 레버배수)
-_DROP_TIERS = [
-    (-5,  0.10, "2x"),
-    (-10, 0.20, "3x"),
-    (-15, 0.35, "3x"),
-    (-20, 0.50, "3x"),
-]
 
 
 def build_buy_zones(holdings: dict[str, float]) -> str:
@@ -397,95 +413,92 @@ def _calc_deployable_cash(holdings: dict[str, float], idle_cash: float) -> tuple
     return total, sgov_val, idle_cash
 
 
+def _tier_emoji(lev: str) -> str:
+    if lev == "3x":   return "🔴"
+    if lev == "2.5x": return "🟠"
+    if lev == "2x":   return "🟡"
+    return "🟢"
+
+
 def build_leverage_guide(holdings: dict[str, float], idle_cash: float) -> str:
     """
-    QQQM/SPYM/SOXQ 낙폭 → TQQQ/UPRO/SOXL 매수 가이드.
+    QQQM/SPYM/SOXQ 낙폭 → 레버리지 ETF 단계별 매수 가이드.
+    가용현금 = SGOV 시세×수량 + 달러잔고.
 
-    현금 재원: SGOV 시세×수량 + 달러잔고 (실시간 계산)
-    4단계 분할 배분:
-      1차 -5%  → 2x ETF, 재원의 10%
-      2차 -10% → 3x ETF, 재원의 20%
-      3차 -15% → 3x ETF, 재원의 35%
-      4차 -20% → 3x ETF, 재원의 50% (남은 재원 투입)
+    단계별 레버리지:
+      QQQM/SPYM  -5%  1차 ~1.5x (QLD/SSO 소량)
+                 -10% 2차  2x   (QLD/SSO)
+                 -15% 3차  2.5x (QLD+TQQQ / SSO+UPRO 반반)
+                 -20% 4차  3x   (TQQQ/UPRO)
+      SOXQ       -10% 1차  3x   (SOXL 소량, 2x 없음)
     """
     total_cash, sgov_val, idle = _calc_deployable_cash(holdings, idle_cash)
     if total_cash <= 0:
         return ""
 
     lines = [
-        f"<b>📐 레버리지 전략 가이드</b>",
+        "<b>📐 레버리지 전략 가이드</b>",
         f"  💰 가용현금  <b>${total_cash:,.0f}</b>"
         + (f"  <i>(달러 ${idle:,.0f} + SGOV ${sgov_val:,.0f})</i>" if sgov_val > 0 else ""),
     ]
 
-    # 4단계 배분표
-    tiers = [
-        (-5,  0.10, "2x", "1차"),
-        (-10, 0.20, "3x", "2차"),
-        (-15, 0.35, "3x", "3차"),
-        (-20, 0.50, "3x", "4차 (대량)"),
-    ]
-    lines.append("  <i>낙폭 기준  (QQQM/SPYM/SOXQ 60일 고점 대비)</i>")
-    for drop, ratio, lev_type, label in tiers:
-        amt = total_cash * ratio
-        lines.append(
-            f"  {'🟡' if lev_type=='2x' else '🔴'}  {label}  {drop}%  →  {lev_type} 매수  <b>${amt:,.0f}</b>  ({ratio*100:.0f}%)"
-        )
-
-    lines.append("")
-    lines.append("<b>📊 현재 상태</b>")
     any_signal = False
-
     for base_ticker, info in _LEV_STRATEGY.items():
         try:
             df = fetch_stock_data(base_ticker, period="3mo")
             if df.empty:
                 continue
-            close   = df["Close"].squeeze()
-            cur     = float(close.iloc[-1])
-            high60  = float(close.rolling(min(60, len(close))).max().iloc[-1])
-            dd      = (cur - high60) / high60 * 100
+            close  = df["Close"].squeeze()
+            cur    = float(close.iloc[-1])
+            high60 = float(close.rolling(min(60, len(close))).max().iloc[-1])
+            dd     = (cur - high60) / high60 * 100
+            name   = info["name"]
+            tiers  = info["tiers"]
 
-            # 현재 해당하는 단계
-            active_tier = None
-            for drop, ratio, lev_type, label in reversed(tiers):
-                if dd <= drop:
-                    active_tier = (drop, ratio, lev_type, label)
+            # 현재 도달한 단계 (가장 깊은 것)
+            active = None
+            for t in reversed(tiers):
+                if dd <= t["drop"]:
+                    active = t
                     break
 
-            lev3 = info["lev3x"]
-            lev2 = info.get("lev2x")
-            name = info["name"]
-            note = _timing_note(close)
+            lines.append("")
+            lines.append(f"  <b>{base_ticker}</b> ({name})  현재 {dd:+.1f}%  (60일 고점 대비)")
 
-            if active_tier:
-                drop, ratio, lev_type, label = active_tier
-                lev_ticker = lev3 if lev_type == "3x" else (lev2 or lev3)
-                amt = total_cash * ratio
+            for t in tiers:
+                amt      = total_cash * t["ratio"]
+                etf_strs = "  +  ".join(
+                    f"<b>{etf}</b> ${amt*w:,.0f}" for etf, w in t["etfs"]
+                )
+                marker = "👉" if active and t["drop"] == active["drop"] else "  "
+                lines.append(
+                    f"  {marker} {_tier_emoji(t['lev'])} {t['label']} {t['drop']}%  "
+                    f"[{t['lev']}]  {etf_strs}  <i>({t['ratio']*100:.0f}%)</i>"
+                )
+
+            if active:
                 any_signal = True
-                line = (
-                    f"  🔴 <b>{base_ticker}</b> ({name})  {dd:+.1f}%\n"
-                    f"     → <b>{label}</b>  <b>{lev_ticker}</b> <b>${amt:,.0f}</b> 매수 구간"
+                note = _timing_note(close)
+                etf_buy = "  +  ".join(
+                    f"{etf} ${total_cash * active['ratio'] * w:,.0f}"
+                    for etf, w in active["etfs"]
                 )
+                lines.append(f"     ▶ 지금: {etf_buy}")
                 if note:
-                    line += f"\n     {note}"
+                    lines.append(f"     {note}")
             else:
-                # 대기 중 — 가장 가까운 다음 구간까지 거리 표시
-                next_drop = -5
-                to_go = cur * (1 + next_drop / 100)
-                gap   = (to_go - cur) / cur * 100
-                lev_ticker = lev2 or lev3
-                line = (
-                    f"  ⚪ <b>{base_ticker}</b> ({name})  {dd:+.1f}%  대기 중\n"
-                    f"     1차 구간 ({next_drop}%)까지 <b>{gap:+.1f}%</b>  →  {lev_ticker} 준비"
+                first_tier = tiers[0]
+                gap = (cur * (1 + first_tier["drop"] / 100) - cur) / cur * 100
+                first_etf = first_tier["etfs"][0][0]
+                lines.append(
+                    f"     ⚪ 대기 중  1차({first_tier['drop']}%)까지 <b>{gap:+.1f}%</b>  → {first_etf} 준비"
                 )
-            lines.append(line)
         except Exception as e:
             print(f"[leverage_guide] {base_ticker}: {e}")
 
     if any_signal:
         lines.append("")
-        lines.append("  <i>※ 같은 구간 신호 반복 시 매일 1회분씩 분할 추가</i>")
+        lines.append("  <i>※ 같은 구간 지속 시 매일 1회분씩 분할 추가</i>")
 
     return "\n".join(lines)
 
