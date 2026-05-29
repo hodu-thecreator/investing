@@ -42,16 +42,5 @@ class Config:
     CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
     IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "612.19"))  # 미사용 USD 잔고
 
-    # ── 정기 적립 스케줄 ─────────────────────────────────────────
-    # interval: "biweekly" = 2주마다, "monthly" = 월 1회
-    DCA_SCHEDULE: dict[str, dict] = {
-        "SPYM": {"amount": 50,  "interval": "biweekly"},
-        "QQQM": {"amount": 40,  "interval": "biweekly"},
-        "ETN":  {"amount": 40,  "interval": "biweekly"},
-        "SCHD": {"amount": 40,  "interval": "biweekly"},
-        "GEV":  {"amount": 20,  "interval": "biweekly"},
-        "VRT":  {"amount": 20,  "interval": "monthly"},
-        "MU":   {"amount": 20,  "interval": "monthly"},
-        "SOXQ": {"amount": 20,  "interval": "monthly"},
-        "SGOV": {"amount": 20,  "interval": "monthly"},
-    }
+    # ── 정기 적립 스케줄 (자동 매수 비활성화) ───────────────────
+    DCA_SCHEDULE: dict[str, dict] = {}

@@ -124,22 +124,40 @@ def collect_events(holdings: dict[str, float], days_ahead: int = 14) -> list[tup
 
 
 def get_dividend_schedule(holdings: dict[str, float], days_ahead: int = 90) -> list[dict]:
-    """보유 종목 다가오는 배당 일정 (배당락 + 지급일 + 수량×금액)."""
+    """보유 종목 다가오는 배당 일정 (배당락 + 지급일 + 수량×금액).
+
+    표시 기준:
+    - 미래 배당락: 오늘~days_ahead 이내
+    - 배당락 지났지만 입금 전: ex_date ≤ today AND pay_date > today (단, ex_date가 45일 이내여야 함)
+    - 최근 입금 완료: pay_date가 지난 14일 이내
+    """
     today = datetime.now().date()
     horizon = today + timedelta(days=days_ahead)
+    stale_cutoff = today - timedelta(days=45)  # 45일 넘은 ex_date는 무시
+    paid_cutoff  = today - timedelta(days=14)  # 최근 14일 입금분 표시
+
     out = []
     for ev in _fetch_holdings_events(holdings):
-        ex = ev["div_date"]
+        ex  = ev["div_date"]
         pay = ev["div_pay_date"]
-        if not ex:
+        if not ex or ex < stale_cutoff:
             continue
-        # 배당락 horizon 이내 OR 배당락은 지났지만 지급일 미래
-        in_window = (today <= ex <= horizon) or (pay and ex < today <= pay)
-        if not in_window:
+
+        # 미래 배당락
+        upcoming_ex = today <= ex <= horizon
+        # 배당락 지났지만 입금 아직 (pay_date > today)
+        pending_pay = (ex < today) and (pay is not None) and (pay > today)
+        # 최근 입금 완료 (pay_date가 지난 14일 이내)
+        recent_paid = (pay is not None) and (paid_cutoff <= pay <= today)
+
+        if not (upcoming_ex or pending_pay or recent_paid):
             continue
+
         qty = holdings.get(ev["ticker"], 0) or 0
         per_share = ev["div_amount"]
         total = (per_share * qty) if (per_share and qty) else None
+
+        status = "paid" if recent_paid else ("pending" if pending_pay else "upcoming")
         out.append({
             "ticker":        ev["ticker"],
             "ex_date":       ex,
@@ -149,6 +167,7 @@ def get_dividend_schedule(holdings: dict[str, float], days_ahead: int = 90) -> l
             "total":         total,
             "ex_days_left":  (ex - today).days,
             "pay_days_left": (pay - today).days if pay else None,
+            "status":        status,
         })
     out.sort(key=lambda x: x["ex_date"])
     return out
@@ -187,7 +206,7 @@ def build_calendar_section(holdings: dict[str, float], days_ahead: int = 14) -> 
 
     has_macro = any(k in ("fomc", "cpi") for _, k, _ in items)
     if has_macro:
-        lines.append("  <i>거시 이벤트 전엔 신규 적립 일시 정지 권장</i>")
+        lines.append("  <i>⚠️ 거시 이벤트 있음 — 신규 매수 신중히</i>")
     return "\n".join(lines)
 
 

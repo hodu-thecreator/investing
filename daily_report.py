@@ -21,7 +21,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from market_indicators import collect_all, get_nzd_krw_cross, format_change_chip
 from telegram_notifier import send_message
 from config import Config
-from dca_calculator import build_dca_section
 from events import build_calendar_section, get_dividend_schedule
 from rebalancing import check_drifts, calc_portfolio_state
 import ibkr_flex
@@ -239,9 +238,7 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
     elif diff_pct > 0:
         lines.append(f"  💰 목표 +{diff_pct:.1f}%p 초과 (여유 ${diff_usd:.0f})")
     else:
-        needed = -diff_usd
-        lines.append(f"  ⚠️ 목표 {abs(diff_pct):.1f}%p 부족")
-        lines.append(f"  → 신규 적립금 <b>${needed:.0f}</b>를 SGOV에 배분 권장")
+        lines.append(f"  ⚠️ 목표 {abs(diff_pct):.1f}%p 부족  (${-diff_usd:.0f} 미달)")
 
     if risk_signals:
         lines.append(f"  <i>위험 신호: {' · '.join(risk_signals[:3])}</i>")
@@ -880,39 +877,51 @@ def build_dividend_schedule_section(holdings: dict, days_ahead: int = 90) -> str
         return ""
 
     lines = [f"<b>📅 배당 일정 ({days_ahead}일 이내)</b>"]
-    total_sum = 0.0
+    total_upcoming = 0.0
+
     for d in sched:
-        ex_diff = d["ex_days_left"]
-        ex_tag = "오늘" if ex_diff == 0 else "내일" if ex_diff == 1 else (
-            f"D-{ex_diff}" if ex_diff > 0 else f"D+{abs(ex_diff)}"
-        )
-        ex_str = f"{d['ex_date']:%m/%d}"
+        status   = d.get("status", "upcoming")
+        ex_str   = f"{d['ex_date']:%m/%d}"
+        ex_diff  = d["ex_days_left"]
 
-        if d["pay_date"]:
-            pay_diff = d["pay_days_left"]
-            pay_tag = "오늘" if pay_diff == 0 else (
-                f"D-{pay_diff}" if pay_diff > 0 else f"D+{abs(pay_diff)}"
-            )
-            pay_str = f"{d['pay_date']:%m/%d}"
-            pay_part = f"입금 {pay_str} ({pay_tag})"
-        else:
-            pay_part = "입금 미정"
-
-        amt = ""
+        amt_str = ""
         if d["amount"]:
             if d["total"]:
-                amt = f"  +${d['total']:.2f}  <i>(${d['amount']:.4f}×{d['qty']:g})</i>"
-                total_sum += d["total"]
+                amt_str = f"  <b>+${d['total']:.2f}</b>  <i>(${d['amount']:.4f}×{d['qty']:g})</i>"
             else:
-                amt = f"  ${d['amount']:.4f}/주"
+                amt_str = f"  ${d['amount']:.4f}/주"
 
-        marker = "💵" if (d["pay_date"] and d["pay_days_left"] is not None and d["pay_days_left"] >= 0) else "•"
-        lines.append(
-            f"  {marker} <b>{d['ticker']}</b>  배당락 {ex_str} ({ex_tag})  {pay_part}{amt}"
-        )
+        if status == "paid":
+            # 최근 입금 완료
+            pay_str = f"{d['pay_date']:%m/%d}" if d["pay_date"] else "?"
+            lines.append(f"  ✅ <b>{d['ticker']}</b>  배당락 {ex_str}  입금 {pay_str} 완료{amt_str}")
+            if d["total"]:
+                total_upcoming += d["total"]
 
-    if total_sum > 0:
-        lines.append(f"\n  💰 <b>{days_ahead}일 예상 총 배당  +${total_sum:.2f}</b>")
+        elif status == "pending":
+            # 배당락 지났지만 입금 전
+            pay_diff = d["pay_days_left"]
+            pay_str  = f"{d['pay_date']:%m/%d}" if d["pay_date"] else "?"
+            pay_tag  = f"D-{pay_diff}"
+            lines.append(f"  💵 <b>{d['ticker']}</b>  배당락 {ex_str} 완료  입금 {pay_str} ({pay_tag}){amt_str}")
+            if d["total"]:
+                total_upcoming += d["total"]
+
+        else:
+            # upcoming — 배당락 앞
+            ex_tag = "오늘" if ex_diff == 0 else "내일" if ex_diff == 1 else f"D-{ex_diff}"
+            if d["pay_date"]:
+                pay_str = f"{d['pay_date']:%m/%d}"
+                pay_tag = f"D-{d['pay_days_left']}" if d["pay_days_left"] and d["pay_days_left"] > 0 else "?"
+                pay_part = f"  입금 {pay_str} ({pay_tag})"
+            else:
+                pay_part = "  입금 미정"
+            lines.append(f"  📌 <b>{d['ticker']}</b>  배당락 {ex_str} ({ex_tag}){pay_part}{amt_str}")
+            if d["total"]:
+                total_upcoming += d["total"]
+
+    if total_upcoming > 0:
+        lines.append(f"\n  💰 <b>예상 수령 합계  +${total_upcoming:.2f}</b>")
     return "\n".join(lines)
 
 
@@ -1247,23 +1256,6 @@ def build_report() -> str:
         lines.append(buy_zone_section)
 
     # ── [5] 오늘의 동적 DCA 권장 금액 ─────────────────────────────
-    base_dds = {}
-    for base_ticker in ("SPYM", "QQQM", "SOXQ"):
-        try:
-            df = fetch_stock_data(base_ticker, period="3mo")
-            if df.empty:
-                continue
-            close = df["Close"].squeeze()
-            current = float(close.iloc[-1])
-            high_60d = float(close.rolling(min(60, len(close))).max().iloc[-1])
-            base_dds[base_ticker] = (current - high_60d) / high_60d * 100
-        except Exception:
-            pass
-    dca_section = build_dca_section(indicators, risk_score, base_dds)
-    if dca_section:
-        lines.append("\n" + "━" * 28)
-        lines.append(dca_section)
-
     # ── [6] 다가오는 이벤트 캘린더 ────────────────────────────────
     cal_section = build_calendar_section(holdings, days_ahead=14)
     if cal_section:
