@@ -285,18 +285,38 @@ def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> s
     return "\n".join(lines)
 
 
-# ── 매수 구간 가이드 ─────────────────────────────────────────────
+# ── 추가매수 없는 홀딩 전용 / 레버리지 전략 전용 종목 ────────────
+
+# 추가매수 계획 없음 — 홀딩 전용
+_NO_ADD_BUY = {"QQQI", "SPYI"}
+
+# 본주 → 레버리지 전략 (하락 시 레버 매수, 본주 추가매수 안 함)
+_LEV_STRATEGY = {
+    "QQQM": {"lev3x": "TQQQ", "lev2x": "QLD",  "name": "나스닥100"},
+    "SPYM": {"lev3x": "UPRO", "lev2x": "SSO",   "name": "S&P500"},
+    "SOXQ": {"lev3x": "SOXL", "lev2x": None,    "name": "반도체"},
+}
+
+# 낙폭별 분할 비중: (낙폭 임계값, 가용현금 대비 비율, 레버배수)
+_DROP_TIERS = [
+    (-5,  0.10, "2x"),
+    (-10, 0.20, "3x"),
+    (-15, 0.35, "3x"),
+    (-20, 0.50, "3x"),
+]
+
 
 def build_buy_zones(holdings: dict[str, float]) -> str:
     """
-    보유 종목별 3단계 매수 구간 제시.
-      1차: 200일선 (첫 타점)
-      2차: 52주 고점 -20% (분할 추가)
-      3차: 52주 저점 +5% (대거 매수)
+    개별 종목 3단계 매수 구간.
+    - QQQI/SPYI 등 추가매수 없는 종목 제외
+    - QQQM/SPYM/SOXQ 등 레버리지 전략 종목 제외 (레버리지 가이드에서 별도 표시)
+    - 나머지 보유 종목만: 200일선 / 52주 고점-20% / 52주 저점+5%
     """
+    skip = _NO_ADD_BUY | set(_LEV_STRATEGY.keys())
     rows = []
     for ticker, qty in holdings.items():
-        if not qty or qty <= 0:
+        if not qty or qty <= 0 or ticker in skip:
             continue
         try:
             df = fetch_stock_data(ticker, period="1y")
@@ -306,24 +326,23 @@ def build_buy_zones(holdings: dict[str, float]) -> str:
             current = float(close.iloc[-1])
             ma200 = float(close.rolling(min(200, len(close))).mean().iloc[-1])
             high52 = float(close.max())
-            low52 = float(close.min())
-
+            low52  = float(close.min())
             z1 = round(ma200, 2)
-            z2 = round(high52 * 0.80, 2)   # 52주 고점 -20%
-            z3 = round(low52 * 1.05, 2)     # 52주 저점 +5%
+            z2 = round(high52 * 0.80, 2)
+            z3 = round(low52  * 1.05, 2)
 
             def pct_from(target: float) -> str:
-                p = (target - current) / current * 100
-                return f"{p:+.1f}%"
+                return f"{(target - current) / current * 100:+.1f}%"
 
-            rows.append((ticker, current, z1, z2, z3, pct_from(z1), pct_from(z2), pct_from(z3)))
+            rows.append((ticker, current, z1, z2, z3,
+                         pct_from(z1), pct_from(z2), pct_from(z3)))
         except Exception:
             continue
 
     if not rows:
         return ""
 
-    lines = ["<b>📉 매수 구간 (보유 종목)</b>"]
+    lines = ["<b>📉 매수 구간 (기타 보유 종목)</b>"]
     for ticker, cur, z1, z2, z3, p1, p2, p3 in rows:
         lines.append(
             f"  <b>{ticker}</b>  ${cur:.2f}\n"
@@ -334,135 +353,140 @@ def build_buy_zones(holdings: dict[str, float]) -> str:
     return "\n".join(lines)
 
 
-# ── 레버리지 매수 가이드 ──────────────────────────────────────────
-
-# 본주 → 레버리지 ETF 매핑 (2x / 3x)
-_LEVERAGE_MAP = {
-    "SPYM": {"2x": "SSO",  "3x": "UPRO", "name": "S&P500"},
-    "QQQM": {"2x": "QLD",  "3x": "TQQQ", "name": "나스닥100"},
-    "SOXQ": {"2x": None,   "3x": "SOXL", "name": "반도체"},
-}
-
-
-def _calc_entry_timing(close: pd.Series) -> dict:
-    """
-    매수 타이밍 분석 — 모멘텀(5일 수익률) + RSI + 5일선 위치.
-    소수점 매수가 가능하므로 분할 진입을 권장하고,
-    하락 가속 구간에는 사이즈를 줄여 다음 신호를 기다리게 한다.
-
-    multiplier: 권장 금액에 곱하는 계수 (0.3 ~ 1.3)
-    """
-    if len(close) < 14:
-        return {"phase": "unknown", "label": "데이터 부족", "multiplier": 1.0}
-
-    current = float(close.iloc[-1])
-    ma5 = float(close.rolling(5).mean().iloc[-1])
-    ret_5d = (current - float(close.iloc[-6])) / float(close.iloc[-6]) * 100 if len(close) >= 6 else 0
-    ret_1d = (current - float(close.iloc[-2])) / float(close.iloc[-2]) * 100 if len(close) >= 2 else 0
-
+def _calc_rsi(close: pd.Series, period: int = 14) -> float | None:
+    if len(close) < period + 1:
+        return None
     delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14).mean()
-    rs = gain / loss.replace(0, float("nan"))
-    rsi = float((100 - 100 / (1 + rs)).iloc[-1])
-
-    above_ma5 = current > ma5
-
-    # 1) 과매도 반등: RSI 30 이하 → 적극 진입
-    if rsi <= 30:
-        return {
-            "phase": "oversold",
-            "advice": f"🟢 적극 진입 (RSI {rsi:.0f} 과매도)",
-            "multiplier": 1.3,
-        }
-    # 2) 반등 시작: 5일 양전환 + 5일선 상회
-    if ret_5d > 0.5 and above_ma5:
-        return {
-            "phase": "rebound",
-            "advice": f"🟢 반등 신호 — 지금 진입",
-            "multiplier": 1.3,
-        }
-    # 3) 하락 가속: 5일 -3%↓ + 5일선 하회 + RSI 35↑ (아직 과매도 전)
-    if ret_5d <= -3 and not above_ma5 and rsi > 35:
-        return {
-            "phase": "falling",
-            "advice": f"⏸ 하락 진행 중 — 대기 (RSI {rsi:.0f})",
-            "multiplier": 0.3,
-        }
-    # 4) 안정화 — 그 외
-    return {
-        "phase": "stabilizing",
-        "advice": "🟡 분할 매수 시작",
-        "multiplier": 1.0,
-    }
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss.replace(0, float("nan"))
+    return float((100 - 100 / (1 + rs)).iloc[-1])
 
 
-def build_leverage_guide(available_cash: float) -> str:
+def _timing_note(close: pd.Series) -> str:
+    """하락 가속 중인지, 반등 신호인지 한 줄 판단."""
+    if len(close) < 6:
+        return ""
+    rsi    = _calc_rsi(close)
+    ma5    = float(close.rolling(5).mean().iloc[-1])
+    cur    = float(close.iloc[-1])
+    ret5d  = (cur - float(close.iloc[-6])) / float(close.iloc[-6]) * 100
+
+    if rsi is not None and rsi <= 30:
+        return f"⚡ RSI {rsi:.0f} 과매도 — 반등 가능성↑"
+    if ret5d <= -3 and cur < ma5:
+        return f"⏸ 하락 진행 중 (5일 {ret5d:+.1f}%) — 분할 대기"
+    if ret5d > 1.0 and cur > ma5:
+        return "🟢 반등 시작 — 진입 우호"
+    return ""
+
+
+def _calc_deployable_cash(holdings: dict[str, float], idle_cash: float) -> tuple[float, float, float]:
+    """SGOV 시세 × 수량 + 달러잔고 = 총 가용현금. (total, sgov_val, idle) 반환."""
+    sgov_price = 0.0
+    sgov_qty   = holdings.get("SGOV", 0) or 0
+    if sgov_qty > 0:
+        try:
+            df = fetch_stock_data("SGOV", period="5d")
+            if not df.empty:
+                sgov_price = float(df["Close"].squeeze().iloc[-1])
+        except Exception:
+            pass
+    sgov_val = round(sgov_price * sgov_qty, 2)
+    total    = round(sgov_val + idle_cash, 2)
+    return total, sgov_val, idle_cash
+
+
+def build_leverage_guide(holdings: dict[str, float], idle_cash: float) -> str:
     """
-    SPYM/QQQM/SOXQ의 60일 고점 대비 낙폭 + 진입 타이밍을 분석해
-    2x/3x 레버리지 매수 시점과 권장 금액을 제시.
+    QQQM/SPYM/SOXQ 낙폭 → TQQQ/UPRO/SOXL 매수 가이드.
 
-    포지션 사이징 (분할 매수 친화적):
-      -5~-10%  → 2x ETF, 가용현금의 1.5%  × 타이밍 계수
-      -10~-15% → 3x ETF, 가용현금의 3%    × 타이밍 계수
-      -15%+    → 3x ETF, 가용현금의 5%    × 타이밍 계수
-
-    같은 신호가 며칠씩 반복되어도 매번 1회분만 들어가도록 작은 비율로 설계.
+    현금 재원: SGOV 시세×수량 + 달러잔고 (실시간 계산)
+    4단계 분할 배분:
+      1차 -5%  → 2x ETF, 재원의 10%
+      2차 -10% → 3x ETF, 재원의 20%
+      3차 -15% → 3x ETF, 재원의 35%
+      4차 -20% → 3x ETF, 재원의 50% (남은 재원 투입)
     """
-    guide_lines = []
+    total_cash, sgov_val, idle = _calc_deployable_cash(holdings, idle_cash)
+    if total_cash <= 0:
+        return ""
+
+    lines = [
+        f"<b>📐 레버리지 전략 가이드</b>",
+        f"  💰 가용현금  <b>${total_cash:,.0f}</b>"
+        + (f"  <i>(달러 ${idle:,.0f} + SGOV ${sgov_val:,.0f})</i>" if sgov_val > 0 else ""),
+    ]
+
+    # 4단계 배분표
+    tiers = [
+        (-5,  0.10, "2x", "1차"),
+        (-10, 0.20, "3x", "2차"),
+        (-15, 0.35, "3x", "3차"),
+        (-20, 0.50, "3x", "4차 (대량)"),
+    ]
+    lines.append("  <i>낙폭 기준  (QQQM/SPYM/SOXQ 60일 고점 대비)</i>")
+    for drop, ratio, lev_type, label in tiers:
+        amt = total_cash * ratio
+        lines.append(
+            f"  {'🟡' if lev_type=='2x' else '🔴'}  {label}  {drop}%  →  {lev_type} 매수  <b>${amt:,.0f}</b>  ({ratio*100:.0f}%)"
+        )
+
+    lines.append("")
+    lines.append("<b>📊 현재 상태</b>")
     any_signal = False
 
-    for base_ticker, lev in _LEVERAGE_MAP.items():
+    for base_ticker, info in _LEV_STRATEGY.items():
         try:
             df = fetch_stock_data(base_ticker, period="3mo")
             if df.empty:
                 continue
-            close = df["Close"].squeeze()
-            current = float(close.iloc[-1])
-            high_60d = float(close.rolling(min(60, len(close))).max().iloc[-1])
-            dd = (current - high_60d) / high_60d * 100
+            close   = df["Close"].squeeze()
+            cur     = float(close.iloc[-1])
+            high60  = float(close.rolling(min(60, len(close))).max().iloc[-1])
+            dd      = (cur - high60) / high60 * 100
 
-            name = lev["name"]
-            timing = _calc_entry_timing(close)
-            mult = timing["multiplier"]
+            # 현재 해당하는 단계
+            active_tier = None
+            for drop, ratio, lev_type, label in reversed(tiers):
+                if dd <= drop:
+                    active_tier = (drop, ratio, lev_type, label)
+                    break
 
-            if dd <= -15:
-                lev_t = lev["3x"]
-                amt = available_cash * 0.05 * mult
-                advice = timing["advice"]
-                guide_lines.append(
-                    f"🔴 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
-                )
+            lev3 = info["lev3x"]
+            lev2 = info.get("lev2x")
+            name = info["name"]
+            note = _timing_note(close)
+
+            if active_tier:
+                drop, ratio, lev_type, label = active_tier
+                lev_ticker = lev3 if lev_type == "3x" else (lev2 or lev3)
+                amt = total_cash * ratio
                 any_signal = True
-            elif dd <= -10:
-                lev_t = lev["3x"]
-                amt = available_cash * 0.03 * mult
-                advice = timing["advice"]
-                guide_lines.append(
-                    f"🟠 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
+                line = (
+                    f"  🔴 <b>{base_ticker}</b> ({name})  {dd:+.1f}%\n"
+                    f"     → <b>{label}</b>  <b>{lev_ticker}</b> <b>${amt:,.0f}</b> 매수 구간"
                 )
-                any_signal = True
-            elif dd <= -5:
-                lev_t = lev["2x"]
-                if lev_t:
-                    amt = available_cash * 0.015 * mult
-                    advice = timing["advice"]
-                    guide_lines.append(
-                        f"🟡 <b>{base_ticker}</b> {dd:+.1f}%  →  <b>{lev_t}</b> ${amt:.0f}  |  {advice}"
-                    )
-                    any_signal = True
+                if note:
+                    line += f"\n     {note}"
             else:
-                guide_lines.append(f"⚪ {base_ticker} {dd:+.1f}%  — 대기 중")
+                # 대기 중 — 가장 가까운 다음 구간까지 거리 표시
+                next_drop = -5
+                to_go = cur * (1 + next_drop / 100)
+                gap   = (to_go - cur) / cur * 100
+                lev_ticker = lev2 or lev3
+                line = (
+                    f"  ⚪ <b>{base_ticker}</b> ({name})  {dd:+.1f}%  대기 중\n"
+                    f"     1차 구간 ({next_drop}%)까지 <b>{gap:+.1f}%</b>  →  {lev_ticker} 준비"
+                )
+            lines.append(line)
         except Exception as e:
-            print(f"[leverage_guide] {base_ticker} 오류: {e}")
+            print(f"[leverage_guide] {base_ticker}: {e}")
 
-    if not guide_lines:
-        return ""
-
-    lines = [f"<b>📐 레버리지 가이드</b>  <i>가용현금 ${available_cash:,.0f}</i>"]
-    lines.extend(guide_lines)
     if any_signal:
-        lines.append("<i>1회 진입 금액 — 같은 신호 반복 시 분할 추가</i>")
+        lines.append("")
+        lines.append("  <i>※ 같은 구간 신호 반복 시 매일 1회분씩 분할 추가</i>")
+
     return "\n".join(lines)
 
 
@@ -1244,7 +1268,7 @@ def build_report() -> str:
         lines.append(cash_section)
 
     # ── [4] 레버리지 매수 가이드 ─────────────────────────────────
-    lev_section = build_leverage_guide(available_cash)
+    lev_section = build_leverage_guide(holdings, idle_cash)
     if lev_section:
         lines.append("\n" + "━" * 28)
         lines.append(lev_section)
