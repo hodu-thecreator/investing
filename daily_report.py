@@ -188,8 +188,8 @@ def check_extreme_overheated(ticker_data: dict) -> dict | None:
 
 def build_cash_section(holdings: dict[str, float], idle_cash: float,
                        base_target_ratio: float, cash_tickers: list[str],
-                       risk_score: int = 0, risk_signals: list[str] = None) -> tuple[str, float]:
-    """현재 현금 비중 vs 목표 비중 추적. (section_text, available_cash) 반환."""
+                       risk_score: int = 0, risk_signals: list[str] = None) -> tuple[str, float, float]:
+    """현재 현금 비중 vs 목표 비중 추적. (section_text, available_cash, total_portfolio) 반환."""
     cash_value = idle_cash
     total_value = idle_cash
     available_cash = idle_cash  # SGOV + idle
@@ -211,7 +211,7 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
             continue
 
     if total_value <= 0:
-        return "", available_cash
+        return "", available_cash, 0.0
 
     target_ratio = calc_cash_target(risk_score)
     ratio = cash_value / total_value
@@ -243,7 +243,7 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
     if risk_signals:
         lines.append(f"  <i>위험 신호: {' · '.join(risk_signals[:3])}</i>")
 
-    return "\n".join(lines), available_cash
+    return "\n".join(lines), available_cash, total_value
 
 
 def build_dividend_section(holdings: dict[str, float], nzd_rate: float = 0) -> str:
@@ -420,7 +420,8 @@ def _tier_emoji(lev: str) -> str:
     return "🟢"
 
 
-def build_leverage_guide(holdings: dict[str, float], idle_cash: float) -> str:
+def build_leverage_guide(holdings: dict[str, float], idle_cash: float,
+                         total_portfolio: float = 0.0) -> str:
     """
     QQQM/SPYM/SOXQ 낙폭 → 레버리지 ETF 단계별 매수 가이드.
     가용현금 = SGOV 시세×수량 + 달러잔고.
@@ -442,6 +443,27 @@ def build_leverage_guide(holdings: dict[str, float], idle_cash: float) -> str:
         + (f"  <i>(달러 ${idle:,.0f} + SGOV ${sgov_val:,.0f})</i>" if sgov_val > 0 else ""),
     ]
 
+    # 단계별 매수 후 현금 비중 시뮬레이션 (총자산 알 때만)
+    if total_portfolio > total_cash:
+        lines.append("")
+        lines.append("  <i>매수 후 예상 현금 비중 (누적)</i>")
+        cumulative_buy = 0.0
+        for drop, ratio, label in [(-5, 0.10, "1차"), (-10, 0.20, "2차"),
+                                    (-15, 0.35, "3차"), (-20, 0.50, "4차")]:
+            cumulative_buy += total_cash * ratio
+            remaining_cash = total_cash - cumulative_buy
+            new_cash_pct   = remaining_cash / total_portfolio * 100
+            if new_cash_pct >= 18:
+                icon = "✅"
+            elif new_cash_pct >= 12:
+                icon = "⚠️"
+            else:
+                icon = "🔴"
+            lines.append(
+                f"  {icon} {label} 후  현금 ${remaining_cash:,.0f}  ({new_cash_pct:.1f}%)"
+                + ("  ← 매도 검토" if new_cash_pct < 12 else "")
+            )
+
     any_signal = False
     for base_ticker, info in _LEV_STRATEGY.items():
         try:
@@ -455,7 +477,6 @@ def build_leverage_guide(holdings: dict[str, float], idle_cash: float) -> str:
             name   = info["name"]
             tiers  = info["tiers"]
 
-            # 현재 도달한 단계 (가장 깊은 것)
             active = None
             for t in reversed(tiers):
                 if dd <= t["drop"]:
@@ -501,6 +522,107 @@ def build_leverage_guide(holdings: dict[str, float], idle_cash: float) -> str:
         lines.append("  <i>※ 같은 구간 지속 시 매일 1회분씩 분할 추가</i>")
 
     return "\n".join(lines)
+
+
+# ── 현금 비중 회복 매도 계획 ─────────────────────────────────────
+
+# 트리밍 허용 종목 (추가매수 없는 홀딩이거나 레버리지 차익실현 대상)
+_TRIM_PRIORITY = [
+    # (ticker, 분류, 최소 수익률 기준)
+    # 레버리지 — 반등 시 수익 실현
+    ("TQQQ", "레버리지", 0.20),
+    ("UPRO", "레버리지", 0.20),
+    ("QLD",  "레버리지", 0.20),
+    ("SSO",  "레버리지", 0.20),
+    ("SOXL", "레버리지", 0.25),
+    # 추가매수 없는 커버드콜 ETF — 과중 시 일부 트리밍 허용
+    ("QQQI", "배당홀딩", 0.0),
+    ("SPYI", "배당홀딩", 0.0),
+]
+
+
+def build_cash_restore_plan(
+    ibkr_positions: dict,
+    total_portfolio: float,
+    current_cash: float,
+    target_cash_ratio: float = 0.20,
+    warn_threshold: float = 0.15,
+) -> str:
+    """
+    현금 비중이 warn_threshold 미만일 때 매도 후보 제시.
+
+    ibkr_positions: {symbol: {qty, cost_basis, mark_price, unrealized_pnl}}
+    매도 우선순위:
+      1) 레버리지 ETF — 취득가 대비 +20%+ 수익 난 것부터
+      2) 추가매수 없는 배당 홀딩 (QQQI/SPYI) — 목표 비중 초과분
+    목표: 현금을 target_cash_ratio(20%)까지 회복
+    """
+    if total_portfolio <= 0:
+        return ""
+
+    cash_ratio = current_cash / total_portfolio
+    if cash_ratio >= warn_threshold:
+        return ""   # 현금 충분 — 섹션 숨김
+
+    needed_cash = total_portfolio * target_cash_ratio - current_cash
+    lines = [
+        "<b>⚖️ 현금 회복 매도 계획</b>",
+        f"  현재 현금 <b>{cash_ratio*100:.1f}%</b>  (목표 {target_cash_ratio*100:.0f}%,  부족 <b>${needed_cash:,.0f}</b>)",
+    ]
+
+    candidates = []
+    for ticker, category, min_gain in _TRIM_PRIORITY:
+        pos = ibkr_positions.get(ticker)
+        if not pos or pos.get("qty", 0) <= 0:
+            continue
+        qty        = pos["qty"]
+        cost       = pos.get("cost_basis", 0)
+        mark       = pos.get("mark_price", 0)
+        if cost <= 0 or mark <= 0:
+            continue
+        gain_pct   = (mark - cost) / cost
+        if gain_pct < min_gain:
+            continue
+        total_val  = mark * qty
+        candidates.append({
+            "ticker":    ticker,
+            "category":  category,
+            "gain_pct":  gain_pct,
+            "mark":      mark,
+            "qty":       qty,
+            "total_val": total_val,
+        })
+
+    # 수익률 높은 순 정렬
+    candidates.sort(key=lambda x: -x["gain_pct"])
+
+    if not candidates:
+        lines.append("  • 매도 후보 없음 (레버리지 미보유 or 수익 미달)")
+        lines.append(f"  • 현금 충당 방법: SGOV 매수 or 일부 배당 ETF 트리밍 수동 검토")
+        return "\n".join(lines)
+
+    lines.append("  <i>수익률 높은 순 — 합산 목표 금액 도달 시 중단</i>")
+    cumulative  = 0.0
+    restored_pct = cash_ratio
+    for c in candidates:
+        if cumulative >= needed_cash:
+            break
+        # 전체 포지션의 최대 50% 매도 (한번에 다 팔지 않음)
+        sell_val  = min(c["total_val"] * 0.5, needed_cash - cumulative)
+        sell_qty  = sell_val / c["mark"]
+        cumulative   += sell_val
+        restored_pct  = (current_cash + cumulative) / total_portfolio
+        lines.append(
+            f"  🔻 <b>{c['ticker']}</b>  수익 <b>{c['gain_pct']*100:+.1f}%</b>  "
+            f"→ {sell_qty:.2f}주 매도  ${sell_val:,.0f}  "
+            f"<i>(잔여 {c['qty']-sell_qty:.2f}주)</i>"
+        )
+
+    final_cash_pct = (current_cash + min(cumulative, needed_cash)) / total_portfolio * 100
+    icon = "✅" if final_cash_pct >= 18 else "⚠️"
+    lines.append(f"\n  {icon} 매도 후 예상 현금  <b>{final_cash_pct:.1f}%</b>")
+    return "\n".join(lines)
+
 
 
 # ── 시장 뉴스 수집 + Claude 코멘터리 ────────────────────────────
@@ -1271,7 +1393,7 @@ def build_report() -> str:
         lines.extend(extreme_overheat_list)
 
     # ── [3] 현금 비중 + 위험점수 섹션 ────────────────────────────
-    cash_section, available_cash = build_cash_section(
+    cash_section, available_cash, _total_portfolio = build_cash_section(
         holdings, idle_cash,
         _config.TARGET_CASH_RATIO, _config.CASH_TICKERS,
         risk_score=risk_score, risk_signals=risk_signals,
@@ -1281,7 +1403,7 @@ def build_report() -> str:
         lines.append(cash_section)
 
     # ── [4] 레버리지 매수 가이드 ─────────────────────────────────
-    lev_section = build_leverage_guide(holdings, idle_cash)
+    lev_section = build_leverage_guide(holdings, idle_cash, total_portfolio=_total_portfolio)
     if lev_section:
         lines.append("\n" + "━" * 28)
         lines.append(lev_section)
@@ -1319,6 +1441,19 @@ def build_report() -> str:
                 )
     except Exception as e:
         print(f"[rebalance] {e}")
+
+    # ── [7-b] 현금 회복 매도 계획 (현금 15% 미만일 때만) ────────────
+    if _ibkr_ok and _total_portfolio > 0:
+        _cur_cash, _, _ = _calc_deployable_cash(holdings, idle_cash)
+        restore_plan = build_cash_restore_plan(
+            ibkr_positions=_ibkr["positions"],
+            total_portfolio=_total_portfolio,
+            current_cash=_cur_cash,
+            target_cash_ratio=_config.TARGET_CASH_RATIO,
+        )
+        if restore_plan:
+            lines.append("\n" + "━" * 28)
+            lines.append(restore_plan)
 
     # ── [8] 예상 배당 섹션 ────────────────────────────────────────
     div_section = build_dividend_section(holdings, nzd_rate)
