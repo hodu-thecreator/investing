@@ -1084,6 +1084,178 @@ def build_kr_tax_section(usd_krw: float) -> str:
     return "\n".join(lines)
 
 
+# ── 레버리지 익절 → 탄약 재장전 (헌법 예외: 레버리지는 임시 포지션) ──────
+
+def build_leverage_harvest_plan(
+    holdings: dict[str, float],
+    idle_cash: float,
+    total_portfolio: float,
+    positions: dict,
+) -> str:
+    """
+    ATH 근처에서 레버리지 ETF 부분 익절 → SGOV 탄약 재장전.
+
+    트리거 3가지 모두 충족 시만 표시:
+      1. S&P500 ATH 대비 낙폭 -3% 이내 (레버리지 고점 타이밍)
+      2. SGOV/현금 비중이 목표(29%) 미달 — 탄약 부족
+      3. 보유 레버리지 ETF 중 미실현 수익 ≥ 15% 인 것 존재
+    코어(QQQM/SPYM/GLDM/IBIT)는 대상 제외 — 절대 매도 안 함.
+    """
+    if total_portfolio <= 0:
+        return ""
+
+    # Trigger 1: S&P near ATH
+    sp = _sp500_drawdown_from_ath()
+    if sp is None:
+        return ""
+    dd = sp["drawdown"]
+    if dd < -5.0:
+        return ""  # 조정 중 — 레버리지 익절 타이밍 아님
+
+    # Trigger 2: 현금 비중 부족
+    target_ratio = _config.CORE_ALLOCATION["SGOV"]  # 0.29
+    cash_value = idle_cash
+    for t, q in holdings.items():
+        if not q or q <= 0:
+            continue
+        if t in _config.CASH_TICKERS:
+            try:
+                df = fetch_stock_data(t, period="5d")
+                if not df.empty:
+                    cash_value += float(df["Close"].squeeze().iloc[-1]) * q
+            except Exception:
+                pass
+
+    target_cash_usd = total_portfolio * target_ratio
+    cash_shortage = target_cash_usd - cash_value
+    if cash_shortage < 200:
+        return ""  # 탄약 충분 — 익절 불필요
+
+    # Trigger 3: 레버리지 ETF 수익 확인
+    # IBKR positions 없으면 transactions 모듈로 폴백
+    try:
+        from transactions import portfolio_summary
+        tx_summary = portfolio_summary()
+    except Exception:
+        tx_summary = {}
+
+    lev_tickers = list(_config.LEVERAGE_BUCKET.keys())  # QLD, TQQQ, SSO, UPRO
+    candidates: list[dict] = []
+
+    for t in lev_tickers:
+        qty = holdings.get(t, 0) or 0
+        if qty < 0.01:
+            continue
+
+        pos = (positions or {}).get(t)
+        cur_price: float | None = None
+        gain_pct: float | None = None
+        unrealized: float | None = None
+
+        if pos and pos.get("mark_price"):
+            cur_price = float(pos["mark_price"])
+            cost_per_share = (
+                float(pos["cost_basis"]) / float(pos.get("qty", qty))
+                if pos.get("cost_basis") and pos.get("qty")
+                else None
+            )
+            if cost_per_share and cost_per_share > 0:
+                gain_pct = (cur_price - cost_per_share) / cost_per_share * 100
+                unrealized = (cur_price - cost_per_share) * qty
+
+        if cur_price is None:
+            tx = tx_summary.get(t, {})
+            if tx.get("current_price"):
+                cur_price = float(tx["current_price"])
+                if tx.get("avg_price") and tx["avg_price"] > 0:
+                    gain_pct = (cur_price - tx["avg_price"]) / tx["avg_price"] * 100
+                    unrealized = tx.get("unrealized", None)
+
+        if cur_price is None:
+            try:
+                df = fetch_stock_data(t, period="5d")
+                if not df.empty:
+                    cur_price = float(df["Close"].squeeze().iloc[-1])
+            except Exception:
+                continue
+
+        if cur_price is None:
+            continue
+
+        if gain_pct is not None and gain_pct < 15:
+            continue  # 수익 부족 — 익절 효과 미미
+
+        candidates.append({
+            "ticker": t,
+            "qty": qty,
+            "price": cur_price,
+            "value": cur_price * qty,
+            "gain_pct": gain_pct,
+            "unrealized": unrealized,
+            "bucket": _config.LEVERAGE_BUCKET[t],
+        })
+
+    if not candidates:
+        return ""
+
+    candidates.sort(key=lambda x: (x["gain_pct"] or 0), reverse=True)
+
+    lines = ["<b>🔋 레버리지 익절 → 탄약 재장전</b>  <i>(월 납입 대체)</i>"]
+    lines.append(
+        f"  S&P500  ATH 대비 <b>{dd:+.1f}%</b>  "
+        f"← 레버리지 고점 익절 타이밍"
+    )
+    cash_ratio = cash_value / total_portfolio
+    lines.append(
+        f"  현금(SGOV)  {cash_ratio*100:.1f}% / 목표 {target_ratio*100:.0f}%  "
+        f"— 탄약 <b>${cash_shortage:,.0f}</b> 부족"
+    )
+    lines.append("")
+
+    # 익절 플랜 계산 (수익률 높은 순, 최대 50% 매도)
+    remaining = cash_shortage
+    sell_plans: list[dict] = []
+    for c in candidates:
+        if remaining <= 50:
+            break
+        sell_value = min(c["value"] * 0.5, remaining)
+        sell_qty = sell_value / c["price"]
+        sell_pct = sell_qty / c["qty"] * 100
+        sell_plans.append({**c, "sell_qty": sell_qty,
+                           "sell_value": sell_value, "sell_pct": sell_pct})
+        remaining -= sell_value
+
+    lines.append("<b>📋 제안 매도 플랜 (SGOV로 전환)</b>")
+    total_harvest = 0.0
+    for p in sell_plans:
+        gain_tag = (
+            f"  <i>(수익 {p['gain_pct']:+.0f}%)</i>"
+            if p["gain_pct"] is not None else ""
+        )
+        lines.append(
+            f"  • <b>{p['ticker']}</b>  {p['sell_qty']:.2f}주 매도  "
+            f"≈ <b>${p['sell_value']:,.0f}</b>  ({p['sell_pct']:.0f}% 부분 익절){gain_tag}"
+        )
+        total_harvest += p["sell_value"]
+
+    new_cash = cash_value + total_harvest
+    new_ratio = new_cash / total_portfolio
+    lines.append(f"\n  📥 SGOV 매수  +<b>${total_harvest:,.0f}</b>")
+    lines.append(
+        f"  재장전 후 현금  {new_ratio*100:.1f}%  "
+        f"({'✅ 목표 달성' if new_ratio >= target_ratio * 0.95 else f'목표 {target_ratio*100:.0f}% 미달'})"
+    )
+    if remaining > 100:
+        lines.append(
+            f"  <i>⚠️ 전액 회복 불가 (${remaining:,.0f} 잔여 부족 — 이후 납입금으로 보완)</i>"
+        )
+
+    lines.append("")
+    lines.append("  <i>※ 레버리지는 '조정 시 임시 포지션' (헌법 5조) — ATH 근처 익절 허용.</i>")
+    lines.append("  <i>코어(QQQM/SPYM/GLDM/IBIT)는 절대 매도 안 함 (헌법 7조).</i>")
+    return "\n".join(lines)
+
+
 # ── 리포트 빌더 ──────────────────────────────────────────────────
 
 def build_report() -> str:
@@ -1268,6 +1440,18 @@ def build_report() -> str:
     if cash_section:
         lines.append("\n" + "━" * 28)
         lines.append(cash_section)
+
+    # ── [3-b] 레버리지 익절 → 탄약 재장전 (ATH 근처 + 현금 부족 시만) ──
+    try:
+        harvest_section = build_leverage_harvest_plan(
+            holdings, idle_cash, _total_portfolio,
+            _ibkr["positions"] if _ibkr_ok else {},
+        )
+        if harvest_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(harvest_section)
+    except Exception as e:
+        print(f"[harvest] {e}")
 
     # ── [4] 조정 대응 가이드 (헌법 6조: S&P500 ATH 트리거) ────────
     correction_section = build_correction_section(
