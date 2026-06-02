@@ -29,11 +29,10 @@ _config = Config()
 
 ACCUMULATION_PORTFOLIO = _config.ACCUMULATION_PORTFOLIO
 
-# ── 포트폴리오 설정 ──────────────────────────────────────────────
-_watch = os.getenv("WATCH_STOCKS", "")
-PORTFOLIO = [t.strip() for t in _watch.split(",") if t.strip()] or \
-            ["QQQI","SPYI","ETN","MU","VRT","AEHR","GEV",
-             "SOXL","UPRO","QLD","TQQQ","SSO","QQQM","SOXQ","SPYM","SCHD"]
+# ── 포트폴리오 설정 (헌법 5조: 코어 5종목) ───────────────────────
+CORE_TICKERS = list(_config.CORE_ALLOCATION.keys())   # QQQM, SPYM, GLDM, IBIT, SGOV
+LEGACY_TICKERS = set(_config.LEGACY_TICKERS)           # 청산 예정 비헌법 종목
+PORTFOLIO = CORE_TICKERS
 MA_PERIODS = [50, 200]
 
 
@@ -917,7 +916,6 @@ def build_action_plan(
     risk_score: int,
     available_cash: float,
     drifts: list,
-    extreme_overheat: list,
     buy_count: int,
 ) -> str:
     """모든 시그널을 종합해 우선순위 액션 2-3개 도출."""
@@ -960,40 +958,30 @@ def build_action_plan(
             "⭐⭐" if mkt_score >= 6 else "⭐", "매수 우호 구간",
             [
                 f"시장 점수 +{mkt_score} — 매수 시그널",
-                f"가용현금 {size_pct}% (${amt:,.0f}) 분할 매수 검토",
-                f"매수 리스트({buy_count}개) 중 200일선 근접 종목 우선",
+                f"가용현금 {size_pct}% (${amt:,.0f}) 코어(QQQM/SPYM) 분할 매수",
+                f"조정 구간 코어 {buy_count}종목 — 아래 조정 가이드 참조",
             ],
         ))
 
-    # 4) 거시 위험 (risk_score ≥ 7)
+    # 4) 거시 위험 (risk_score ≥ 7) — 방어이되 매도 안 함
     if risk_score >= 7:
         actions.append((
-            "⚠️", "거시 위험 — 방어 자세",
+            "⚠️", "거시 위험 — 탄약 비축 모드",
             [
                 f"위험점수 {risk_score} — 침체/거품 신호",
-                "신규 매수 자제, 현금 비중 확대",
-                "차익 실현 후보 점검 (RSI 70+ 종목)",
+                "신규 레버리지 금지, SGOV 탄약 비축",
+                "매도 안 함 (헌법 7조). 조정 오면 기계적 매수.",
             ],
         ))
 
-    # 5) 극단 과열 — 차익 실현
-    if extreme_overheat:
-        actions.append((
-            "🔴", "차익 실현 검토",
-            [
-                f"과열 종목 {len(extreme_overheat)}개 — 일부 매도 고려",
-                "10-20% 부분 매도로 리스크 축소",
-            ],
-        ))
-
-    # 6) 리밸런싱
+    # 5) 리밸런싱 (±10%p 이상, 연 1회 점검)
     if drifts:
         d = drifts[0]
         actions.append((
-            "⚖️", "리밸런싱 필요",
+            "⚖️", "리밸런싱 점검 (연 1회)",
             [
-                f"{d['category']} 드리프트 {d['drift_pct']:+.1f}%p",
-                "타깃 비중으로 복원 검토",
+                f"{d['category']} 드리프트 {d['drift_pct']:+.1f}%p (±10%p 초과)",
+                "자동투자 비율 조정으로 자연 복원 우선",
             ],
         ))
 
@@ -1136,86 +1124,59 @@ def build_report() -> str:
         lines.append("\n" + "━" * 28)
         lines.append(accum_report)
 
-    # ── [2] 종목별 판단 섹션 ──────────────────────────────────────
+    # ── [2] 코어 5종목 현황 (헌법 5조 — 매도 판단 없음, 보유 전제) ──
     lines.append("\n" + "━" * 28)
-    lines.append("<b>🏦 종목별 판단</b>")
+    lines.append("<b>🏦 코어 5종목 현황</b>")
+    lines.append("")
 
-    buy_list, hold_list, cash_list, sell_list = [], [], [], []
-    extreme_overheat_list = []
+    buy_count = 0
 
-    for ticker in PORTFOLIO:
+    for ticker in CORE_TICKERS:
+        target_pct = _config.CORE_ALLOCATION.get(ticker, 0) * 100
         result = judge_ticker(ticker, mkt_score)
-        action = result["action"]
-        emoji = result["emoji"]
         price = result["price"]
         drawdown = result["drawdown"]
-        reasons = result["reasons"]
         rsi = result.get("rsi")
         w52 = result.get("w52")
 
+        if not price:
+            lines.append(f"  ⚪ <b>{ticker}</b>  (목표 {target_pct:.0f}%)  데이터 없음")
+            continue
+
         rsi_tag = ""
         if rsi is not None:
-            if rsi >= 70:
-                rsi_tag = f"  RSI {rsi}🔴"
-            elif rsi <= 30:
-                rsi_tag = f"  RSI {rsi}🟢"
-            else:
-                rsi_tag = f"  RSI {rsi}"
-
+            mark = "🔴" if rsi >= 70 else ("🟢" if rsi <= 30 else "")
+            rsi_tag = f"  RSI {rsi}{mark}"
         w52_tag = f"  52주 {w52['pos_pct']:.0f}%" if w52 else ""
 
-        line = f"{emoji} <b>{ticker}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{w52_tag}"
-        line += f"\n   → {action}"
-        if reasons:
-            line += f"  <i>{' · '.join(reasons[:2])}</i>"
-
-        # 극단 과열 감지 (위험점수 7+ 상황에서만 표시)
-        if risk_score >= 7 and ticker in holdings and holdings[ticker] > 0.01:
-            eo = check_extreme_overheated(result)
-            if eo:
-                extreme_overheat_list.append(
-                    f"{eo['emoji']} <b>{ticker}</b>  ${price:.2f}{rsi_tag}{w52_tag}"
-                    f"\n   <i>{eo['reason']}</i>"
-                )
-
-        if "적극 매수" in action or ("매수" in action and "현금" not in action):
-            buy_list.append(line)
-        elif "현금" in action:
-            cash_list.append(line)
-        elif "매도" in action:
-            sell_list.append(line)
+        # 코어는 매수/매도 판단 대신 현황만. 낙폭 크면 조정 매수 후보 카운트.
+        if drawdown <= -5:
+            zone = "🟢 조정 매수 구간"
+            buy_count += 1
+        elif drawdown <= -2:
+            zone = "🟡 소폭 조정"
         else:
-            hold_list.append(line)
+            zone = "⚪ ATH 근처"
 
-    if buy_list:
-        lines.append("")
-        lines.append("🟢 <b>매수 기회</b>")
-        lines.append("")
-        lines.extend(("\n" + l) for l in buy_list)
-    if hold_list:
-        lines.append("")
-        lines.append("⚪ <b>홀딩</b>")
-        lines.append("")
-        lines.extend(("\n" + l) for l in hold_list)
-    if cash_list:
-        lines.append("")
-        lines.append("🟠 <b>현금 비중 확대 검토</b>")
-        lines.append("")
-        lines.extend(("\n" + l) for l in cash_list)
-    if sell_list:
-        lines.append("")
-        lines.append("🔴 <b>매도 고려</b>")
-        lines.append("")
-        lines.extend(("\n" + l) for l in sell_list)
-
-    # ── 극단 과열 경보 (위험점수 7+ 일 때만) ─────────────────────
-    if extreme_overheat_list:
-        lines.append("\n" + "━" * 28)
         lines.append(
-            "<b>⚠️ 극단 과열 경보</b>  "
-            f"<i>(위험점수 {risk_score} — 일부 차익 검토 가능)</i>"
+            f"  <b>{ticker}</b>  (목표 {target_pct:.0f}%)  ${price:.2f}  "
+            f"({drawdown:+.1f}%){rsi_tag}{w52_tag}\n   → {zone}"
         )
-        lines.extend(extreme_overheat_list)
+
+    lines.append("")
+    lines.append("  <i>코어는 30년 보유. 매수는 조정 트리거(아래), 매도 안 함.</i>")
+
+    # ── [2-b] 레거시 보유 종목 (청산 예정 — 세금 룰 따라) ────────────
+    legacy_held = [(t, q) for t, q in holdings.items()
+                   if q and q > 0.01 and t in LEGACY_TICKERS]
+    if legacy_held:
+        lines.append("")
+        lines.append("<b>🗂 레거시 보유 (헌법 외 — 정리 예정)</b>")
+        for t, q in sorted(legacy_held):
+            r = judge_ticker(t, mkt_score)
+            p = r.get("price") or 0
+            lines.append(f"  • <b>{t}</b>  {q:g}주  ${p:.2f}")
+        lines.append("  <i>신규 매수 금지. 세금 룰(한국 양도세 공제·NZ 면세기)에 맞춰 정리.</i>")
 
     # ── [3] 현금 비중 + 위험점수 섹션 ────────────────────────────
     cash_section, available_cash, _total_portfolio = build_cash_section(
@@ -1283,8 +1244,7 @@ def build_report() -> str:
             risk_score=risk_score,
             available_cash=available_cash,
             drifts=drifts,
-            extreme_overheat=extreme_overheat_list,
-            buy_count=len(buy_list),
+            buy_count=buy_count,
         )
         lines.append("\n" + "━" * 28)
         lines.append(plan)

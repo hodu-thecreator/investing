@@ -19,44 +19,40 @@ from config import Config
 
 _config = Config()
 
-# ── 카테고리별 목표 비중 ──────────────────────────────────────────
+# ── 헌법 5조: 코어 5종목 목표 비중 ────────────────────────────────
+# 레버리지(SSO/UPRO/QLD/TQQQ)는 조정 시 임시 포지션 — 각 코어 노출에 합산.
+# SPYI/QQQI/SOXQ 등 레거시는 미분류로 빠지며 정리 대상.
 TARGET_ALLOCATION: dict[str, dict] = {
-    "성장주": {
+    "S&P500": {
         "target": 0.30,
-        "tickers": ["SPYM", "SPYI", "SSO", "UPRO"],
+        "tickers": ["SPYM", "SSO", "UPRO"],   # SSO/UPRO = S&P 레버 노출
         "preferred": ["SPYM"],
-        "note": "SPYI는 배당 목적 오버웨이트 — 신규 매수는 SPYM",
+        "note": "조정 시 SSO/UPRO 임시 매수 — 평시엔 SPYM",
     },
-    "기술주": {
-        "target": 0.20,
-        "tickers": ["QQQM", "QQQI", "QLD", "TQQQ"],
+    "Nasdaq100": {
+        "target": 0.30,
+        "tickers": ["QQQM", "QLD", "TQQQ"],   # QLD/TQQQ = Nasdaq 레버 노출
         "preferred": ["QQQM"],
-        "note": "QQQI는 배당 목적 오버웨이트 — 신규 매수는 QQQM",
+        "note": "조정 시 QLD/TQQQ 임시 매수 — 평시엔 QQQM",
     },
-    "반도체": {
-        "target": 0.10,
-        "tickers": ["SOXQ", "SOXL", "SOXX"],
-        "preferred": ["SOXQ"],
+    "금": {
+        "target": 0.07,
+        "tickers": ["GLDM"],
+        "preferred": ["GLDM"],
     },
-    "방어주": {
-        "target": 0.10,
-        "tickers": ["SCHD", "DIVO", "DGRW", "QDVO"],
-        "preferred": ["SCHD"],
-    },
-    "테마주": {
-        "target": 0.10,
-        "tickers": ["ETN", "MU", "VRT", "GEV", "AEHR",
-                    "NVDA", "AVGO", "CCJ", "CEG", "XOM", "COPX",
-                    "BITX", "ETHU", "SLV", "GLDM", "ARKK", "CRCL"],
+    "비트코인": {
+        "target": 0.03,
+        "tickers": ["IBIT"],
+        "preferred": ["IBIT"],
     },
     "현금": {
-        "target": 0.20,
+        "target": 0.29,
         "tickers": ["SGOV", "BIL", "SHV", "SHY"],
         "preferred": ["SGOV"],
     },
 }
 
-DRIFT_THRESHOLD = 0.05  # ±5%p
+DRIFT_THRESHOLD = 0.10  # 헌법 7조: ±10%p (연 1회 점검)
 
 
 def _price(ticker: str) -> float | None:
