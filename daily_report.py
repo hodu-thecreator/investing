@@ -1003,6 +1003,87 @@ def build_action_plan(
     return "\n".join(lines)
 
 
+# ── 마일스톤 진행률 (헌법 2·3조) ─────────────────────────────────
+
+def build_milestone_section(total_portfolio: float) -> str:
+    """자산 마일스톤 진행률 — 남과 비교 대신 목표까지의 거리."""
+    if total_portfolio <= 0:
+        return ""
+    milestones = _config.MILESTONES
+    # 다음 목표 찾기
+    nxt = next((m for m in milestones if total_portfolio < m[0]), None)
+    achieved = [m for m in milestones if total_portfolio >= m[0]]
+
+    lines = ["<b>🧭 자유로 가는 길</b>  <i>(인생 목표 = 쉬고 싶을 때 쉬기)</i>"]
+    lines.append(f"  현재 자산  <b>${total_portfolio:,.0f}</b>")
+
+    if nxt is None:
+        lines.append("  🎉 모든 마일스톤 달성 — $2M 돌파!")
+        return "\n".join(lines)
+
+    target, desc = nxt
+    prev = achieved[-1][0] if achieved else 0
+    span = target - prev
+    progress = (total_portfolio - prev) / span if span > 0 else 0
+    filled = int(round(progress * 10))
+    bar = "▓" * filled + "░" * (10 - filled)
+    remaining = target - total_portfolio
+
+    lines.append(f"  {bar}  {progress*100:.0f}%")
+    lines.append(f"  다음: <b>${target:,.0f}</b> ({desc})")
+    lines.append(f"  남은 거리  <b>${remaining:,.0f}</b>")
+
+    # 자유 시작점 ($500K) 강조
+    FREEDOM = 500_000
+    if total_portfolio < FREEDOM:
+        lines.append(f"  ★ 자유 시작점 $500K까지  <b>${FREEDOM - total_portfolio:,.0f}</b>")
+
+    if achieved:
+        lines.append(f"  <i>달성: {' · '.join(f'${m[0]//1000}K' for m in achieved)}</i>")
+    lines.append("  <i>비교는 5년 전 호두와만. SNS 자산 자랑 무시.</i>")
+    return "\n".join(lines)
+
+
+# ── 한국 양도세 공제 추적 (헌법 9조, 한국 phase 한정) ─────────────
+
+def build_kr_tax_section(usd_krw: float) -> str:
+    """
+    한국 phase(2026.5~2027.11) 양도세 250만원 연 공제 활용 추적.
+    유일하게 허용되는 매도(전략적 부분 매도+즉시 재매수로 평단 스텝업).
+    """
+    today = datetime.now()
+    # 한국 phase 종료(2027-11) 이후엔 표시 안 함
+    phase_end = datetime.strptime(_config.KR_PHASE_END, "%Y-%m")
+    if today >= phase_end:
+        return ""
+    if not usd_krw or usd_krw <= 0:
+        return ""
+
+    try:
+        from transactions import realized_ytd
+        realized_usd = realized_ytd()
+    except Exception as e:
+        print(f"[kr_tax] realized_ytd 실패: {e}")
+        realized_usd = 0.0
+
+    realized_krw = realized_usd * usd_krw
+    deduction = _config.KR_CGT_DEDUCTION_KRW
+    headroom_krw = deduction - realized_krw
+    headroom_usd = headroom_krw / usd_krw if usd_krw else 0
+
+    lines = ["<b>🇰🇷 한국 양도세 공제 활용</b>  <i>(연 250만원 비과세)</i>"]
+    lines.append(f"  올해 실현 차익  ₩{realized_krw:,.0f}  (${realized_usd:,.0f})")
+    if headroom_krw > 0:
+        lines.append(f"  남은 공제 여력  <b>₩{headroom_krw:,.0f}</b>  (≈ ${headroom_usd:,.0f})")
+        lines.append(
+            "  <i>전략: 공제 한도만큼 부분 매도 → 즉시 재매수로 평단 스텝업 "
+            "(세금 0, 미래 양도세↓)</i>"
+        )
+    else:
+        lines.append("  ✅ 올해 공제 한도 소진 — 추가 실현 매도 보류")
+    return "\n".join(lines)
+
+
 # ── 리포트 빌더 ──────────────────────────────────────────────────
 
 def build_report() -> str:
@@ -1250,6 +1331,25 @@ def build_report() -> str:
         lines.append(plan)
     except Exception as e:
         print(f"[action_plan] {e}")
+
+    # ── [11] 한국 양도세 공제 추적 (한국 phase 한정) ──────────────
+    try:
+        krw_rate = (indicators.get("usd_krw", {}) or {}).get("usd_to_krw", 0)
+        tax_section = build_kr_tax_section(krw_rate)
+        if tax_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(tax_section)
+    except Exception as e:
+        print(f"[kr_tax] {e}")
+
+    # ── [12] 마일스톤 진행률 (동기 부여 — 클로저) ─────────────────
+    try:
+        ms_section = build_milestone_section(_total_portfolio)
+        if ms_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(ms_section)
+    except Exception as e:
+        print(f"[milestone] {e}")
 
     lines.append("\n" + "━" * 28)
     lines.append("🤖 <i>Stock Agent — 평일 미국 장 오픈 후 30분 자동 발송 (DST 자동 반영)</i>")

@@ -69,22 +69,24 @@ def _html_escape(s: str) -> str:
 def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
     now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%H:%M KST")
     now_et  = datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M ET")
-    sev = "🚨🚨" if tier <= -5 else "🚨" if tier <= -3 else "⚠️"
-    lines = [f"<b>{sev} 미국 장중 급락 알림</b>  {now_kst} ({now_et})"]
+    # 정신건강: '급락/패닉'이 아니라 '세일/기회'로 프레이밍 (헌법 7·12조)
+    sev = "🟢🟢" if tier <= -5 else "🟢" if tier <= -3 else "🟡"
+    lines = [f"<b>{sev} 조정 = 세일 알림</b>  {now_kst} ({now_et})"]
     lines.append("━" * 28)
+    lines.append("\n<i>떨어진 게 아니라 싸진 거예요. 매도 안 함. 탄약 점검만.</i>")
 
-    lines.append("\n<b>📉 주요 지수</b>")
+    lines.append("\n<b>📉 지수 (할인율)</b>")
     for sym, name, price, chg in idx_drops:
-        lines.append(f"  🔴 <b>{name}</b>  ${price:.2f}  <b>{chg:+.2f}%</b>")
+        lines.append(f"  🏷 <b>{name}</b>  ${price:.2f}  <b>{chg:+.2f}%</b>")
 
     if hold_drops:
-        lines.append("\n<b>💼 보유 종목 급락 (-3%+)</b>")
+        lines.append("\n<b>💼 코어 할인 (-3%+)</b>")
         for ticker, price, chg in hold_drops:
-            lines.append(f"  🔴 <b>{ticker}</b>  ${price:.2f}  <b>{chg:+.2f}%</b>")
+            lines.append(f"  🏷 <b>{ticker}</b>  ${price:.2f}  <b>{chg:+.2f}%</b>")
 
     headlines = _fetch_news_headlines()
     if headlines:
-        lines.append("\n<b>📰 헤드라인 (왜 떨어졌나)</b>")
+        lines.append("\n<b>📰 배경 뉴스 (참고용 — 행동 근거 아님)</b>")
         for n in headlines:
             title = _html_escape(n["title"][:100])
             pub = f" <i>({_html_escape(n['publisher'])})</i>" if n.get("publisher") else ""
@@ -93,17 +95,17 @@ def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
             else:
                 lines.append(f"  • {title}{pub}")
 
-    lines.append("\n<b>💡 대응 가이드</b>")
+    lines.append("\n<b>💡 헌법 6조 — S&P ATH 트리거</b>")
     if tier <= -5:
-        lines.append("  • 패닉 매도 금지. 5단계 분할 매수로 진입")
-        lines.append("  • 가용현금의 5~10% 1차 진입 검토")
+        lines.append("  • 큰 조정. SGOV 탄약 적극 발사 구간 가능")
+        lines.append("  • 코어(QQQM/SPYM) 우선. 캡 내에서 레버리지.")
     elif tier <= -3:
-        lines.append("  • 보유 종목 매수 구간 도달 여부 확인")
-        lines.append("  • 가용현금의 3% 분할 매수 검토")
+        lines.append("  • 조정 진행 중. ATH 대비 낙폭 확인 (-5/-10/-20%)")
+        lines.append("  • 트리거 도달 시 코어 분할 매수")
     else:
-        lines.append("  • 일반 조정. 1차 매수 구간(200일선) 모니터링")
-        lines.append("  • 추가 하락 시 분할 진입")
+        lines.append("  • 소폭 조정. 평정심 유지, 자동투자만")
 
+    lines.append("\n<i>🧘 1일 1회 이상 포트 확인 금지. 룰에 위임, 감정 금지.</i>")
     lines.append("\n" + "━" * 28)
     lines.append("🤖 <i>yfinance 데이터 (최대 15분 지연 가능)</i>")
     return "\n".join(lines)

@@ -87,6 +87,37 @@ def _aggregate() -> dict:
     return holdings
 
 
+def realized_ytd(year: int | None = None) -> float:
+    """올해(또는 지정 연도) 실현 차익 합계 (USD). 평단 추적으로 계산."""
+    year = year or datetime.now().year
+    holdings: dict[str, dict] = {}
+    realized = 0.0
+    for r in sorted(_load(), key=lambda x: x.get("date", "")):
+        t = r["ticker"]
+        h = holdings.setdefault(t, {"qty": 0.0, "cost": 0.0})
+        if r["type"] == "buy":
+            h["qty"] += r["qty"]
+            h["cost"] += r["qty"] * r["price"]
+        else:  # sell
+            avg = h["cost"] / h["qty"] if h["qty"] > 0 else r["price"]
+            pnl = r["qty"] * (r["price"] - avg)
+            try:
+                sell_year = datetime.fromisoformat(r.get("ts", r["date"])).year
+            except Exception:
+                try:
+                    sell_year = datetime.strptime(r["date"], "%Y-%m-%d").year
+                except Exception:
+                    sell_year = year
+            if sell_year == year:
+                realized += pnl
+            h["qty"] -= r["qty"]
+            h["cost"] -= r["qty"] * avg
+            if h["qty"] < 1e-6:
+                h["qty"] = 0.0
+                h["cost"] = 0.0
+    return round(realized, 2)
+
+
 def _current_price(ticker: str) -> float | None:
     try:
         df = yf.Ticker(ticker).history(period="5d")
