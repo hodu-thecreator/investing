@@ -4,28 +4,22 @@ load_dotenv()
 
 class Config:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "AAPL,NVDA,TSLA,MSFT,GOOGL").split(",")
+    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "QQQM,SPYM,GLDM,IBIT,SGOV,QLD,TQQQ,SSO,UPRO").split(",")
     WATCH_CRYPTO = os.getenv("WATCH_CRYPTO", "bitcoin,ethereum,solana").split(",")
-    # 소액 적립(DCA) 포트폴리오 — 매일 모으기 중인 전체 목록
+    # 적립·모니터링 대상 포트폴리오
     ACCUMULATION_PORTFOLIO = os.getenv(
         "ACCUMULATION_PORTFOLIO",
-        "QQQI,SPYI,SPYM,QQQM,SCHD,DIVO,DGRW,QDVO,"
-        "BITX,ETHU,ETN,NVDA,VRT,CCJ,CEG,AVGO,XOM,"
-        "COPX,SOXQ,SOXX,SOXL,QLD,SSO,TQQQ,UPRO,"
-        "SLV,GLDM,ARKK,SGOV,CRCL",
+        "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM·IBIT 미보유 → 목표)
+        "QLD,TQQQ,SSO,UPRO,"              # 레버리지 (조정 시 전술)
+        "QQQI,SPYI",                       # 레거시 (정리 중)
     ).replace(" ", "").split(",")
 
-    # ── 실제 보유 주수 (포트폴리오 변경 시 업데이트) ──────────────
-    # 2026-05-07 기준
+    # ── 실제 보유 주수 (IBKR 연결 실패 시 폴백) ──────────────────
+    # IBKR Flex Query로 자동 업데이트됨. 이 값은 비상 폴백용.
     HOLDINGS: dict[str, float] = {
         "QQQI":  600,
         "SPYI":  600,
         "SGOV":  110.24,
-        "ETN":   0.1,
-        "MU":    0.038,
-        "VRT":   0.061,
-        "AEHR":  0.22,
-        "GEV":   0.0186,
         "SOXL":  0.1001,
         "UPRO":  0.1001,
         "QLD":   0.1001,
@@ -36,6 +30,9 @@ class Config:
         "SPYM":  0.01,
         "SCHD":  0.02,
     }
+
+    # 코어 목표이나 아직 미취득 — 리밸런싱 시 우선 매수 대상
+    CORE_UNACQUIRED: list[str] = ["GLDM", "IBIT"]
 
     # ── 현금 관리 ─────────────────────────────────────────────────
     # 헌법 5조: SGOV 목표 29%
