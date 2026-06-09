@@ -1496,8 +1496,8 @@ def build_report() -> str:
             f"({drawdown:+.1f}%){rsi_tag}{w52_tag}\n   → {zone}"
         )
 
-    # 미취득 코어 종목 (목표는 있으나 아직 미보유)
-    unacquired = _config.CORE_UNACQUIRED
+    # 미취득 코어 종목 — IBKR 실제 holdings 기준으로 자동 탐지
+    unacquired = [t for t in CORE_TICKERS if (holdings.get(t) or 0) < 0.001]
     if unacquired:
         lines.append("")
         lines.append("  <b>🎯 미취득 코어 (우선 매수 대상)</b>")
