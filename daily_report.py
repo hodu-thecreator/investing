@@ -1496,6 +1496,18 @@ def build_report() -> str:
             f"({drawdown:+.1f}%){rsi_tag}{w52_tag}\n   → {zone}"
         )
 
+    # 미취득 코어 종목 — IBKR 실제 holdings 기준으로 자동 탐지
+    unacquired = [t for t in CORE_TICKERS if (holdings.get(t) or 0) < 0.001]
+    if unacquired:
+        lines.append("")
+        lines.append("  <b>🎯 미취득 코어 (우선 매수 대상)</b>")
+        for t in unacquired:
+            tgt_pct = _config.CORE_ALLOCATION.get(t, 0) * 100
+            r = judge_ticker(t, mkt_score)
+            p = r.get("price") or 0
+            dd_str = f"  ({r['drawdown']:+.1f}%)" if r.get("drawdown") else ""
+            lines.append(f"  ⬜ <b>{t}</b>  (목표 {tgt_pct:.0f}%)  현재 ${p:.2f}{dd_str}  → 첫 매수 대기")
+
     lines.append("")
     lines.append("  <i>코어는 30년 보유. 매수는 조정 트리거(아래), 매도 안 함.</i>")
 

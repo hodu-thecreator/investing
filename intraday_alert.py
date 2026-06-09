@@ -66,6 +66,30 @@ def _html_escape(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _ath_trigger_status() -> dict | None:
+    """S&P500 ATH 대비 낙폭 + 현재 도달한 헌법 6조 트리거 판정."""
+    try:
+        df = yf.Ticker("SPY").history(period="5y")
+        if df.empty:
+            return None
+        close = df["Close"]
+        current = float(close.iloc[-1])
+        ath = float(close.max())
+        dd = (current - ath) / ath * 100 if ath else 0.0
+
+        from config import Config
+        triggers = Config.CORRECTION_TRIGGERS
+        active = None
+        for tr in triggers:
+            if dd <= tr["drop"]:
+                active = tr
+        return {"current": current, "ath": ath, "drawdown": dd,
+                "active": active, "triggers": triggers}
+    except Exception as e:
+        print(f"[intraday] ATH status fetch failed: {e}")
+        return None
+
+
 def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
     now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%H:%M KST")
     now_et  = datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M ET")
@@ -75,7 +99,7 @@ def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
     lines.append("━" * 28)
     lines.append("\n<i>떨어진 게 아니라 싸진 거예요. 매도 안 함. 탄약 점검만.</i>")
 
-    lines.append("\n<b>📉 지수 (할인율)</b>")
+    lines.append("\n<b>📉 지수 (오늘 일중 변동)</b>")
     for sym, name, price, chg in idx_drops:
         lines.append(f"  🏷 <b>{name}</b>  ${price:.2f}  <b>{chg:+.2f}%</b>")
 
@@ -95,15 +119,32 @@ def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
             else:
                 lines.append(f"  • {title}{pub}")
 
-    lines.append("\n<b>💡 헌법 6조 — S&P ATH 트리거</b>")
-    if tier <= -5:
-        lines.append("  • 큰 조정. SGOV 탄약 적극 발사 구간 가능")
-        lines.append("  • 코어(QQQM/SPYM) 우선. 캡 내에서 레버리지.")
-    elif tier <= -3:
-        lines.append("  • 조정 진행 중. ATH 대비 낙폭 확인 (-5/-10/-20%)")
-        lines.append("  • 트리거 도달 시 코어 분할 매수")
+    lines.append("\n<b>💡 지금 해야 할 행동 (헌법 6조)</b>")
+    lines.append(f"  <i>※ 위 {abs(tier)}%는 '오늘 하루' 변동 — 실제 기준은 ATH 누적 낙폭</i>")
+    ath = _ath_trigger_status()
+    if ath is None:
+        lines.append("  ⚠️ ATH 데이터 조회 실패 — /report 로 직접 확인")
     else:
-        lines.append("  • 소폭 조정. 평정심 유지, 자동투자만")
+        dd = ath["drawdown"]
+        lines.append(f"  S&P500 ATH 대비 <b>{dd:+.1f}%</b>  (ATH ${ath['ath']:,.2f})")
+        active = ath["active"]
+        if active is None:
+            nxt = ath["triggers"][0]
+            gap = nxt["drop"] - dd
+            lines.append("  ✅ 매수 트리거 미도달 — <b>자동투자만</b> 유지")
+            lines.append(f"  📍 1차 트리거({nxt['drop']}%)까지 <b>{gap:.1f}%p</b> 남음")
+        elif active["action"] == "all-in":
+            lines.append("  🔥🔥🔥 -30% 트리거 도달 — <b>비상금 외 전액 발사</b> 구간")
+            lines.append("     → 코어(QQQM/SPYM) 50:50 분할 매수")
+        else:
+            lines.append(
+                f"  🎯 <b>{active['drop']}% 트리거 도달</b> — "
+                f"SGOV 탄약 <b>{active['fire']*100:.0f}%</b> 발사"
+            )
+            lines.append("     → 코어(QQQM/SPYM) 50:50 분할 매수")
+            if active["lev"]:
+                lines.append(f"     → 레버리지 <b>{'/'.join(active['lev'])}</b> (자산 캡 내)")
+        lines.append("  📋 구체적 금액·캡 잔여는 /report '조정 대응 가이드' 참고")
 
     lines.append("\n<i>🧘 1일 1회 이상 포트 확인 금지. 룰에 위임, 감정 금지.</i>")
     lines.append("\n" + "━" * 28)
