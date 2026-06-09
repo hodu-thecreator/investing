@@ -84,6 +84,20 @@ class Config:
         {"drop": -30, "fire": 1.00, "action": "all-in",   "lev": ["UPRO", "TQQQ"], "cap": 0.05},
     ]
 
+    # QQQ·QLD·TQQQ 평균 MDD 기준 (1999-2026 실측)
+    # 출처: 겨울잠(@gyeoul_jam) — 평균 MDD 구간 진입 시 기대수익률
+    MDD_REFERENCE: dict[str, dict] = {
+        "QQQ":  {"avg_mdd": -20.24, "entry_return": 43.3,  "label": "나스닥100 1배"},
+        "QLD":  {"avg_mdd": -30.28, "entry_return": 95.0,  "label": "나스닥100 2배"},
+        "TQQQ": {"avg_mdd": -39.79, "entry_return": 198.0, "label": "나스닥100 3배"},
+    }
+    # 레버리지 분할 익절 타겟 (gain_pct, 설명)
+    LEV_HARVEST_TARGETS: list[tuple] = [
+        (30,  "1/3 익절  수익 부분 확보"),
+        (50,  "1/3 추가  원금 초과 수익 확보"),
+        (100, "잔여 전량  원금 2배 달성 시 청산"),
+    ]
+
     # 헌법 3조 — 자산 마일스톤 (USD, 설명)
     MILESTONES: list[tuple] = [
         (200_000,   "1~2개월 휴직 가능"),

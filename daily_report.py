@@ -318,6 +318,22 @@ def _calc_rsi(close: pd.Series, period: int = 14) -> float | None:
     return float((100 - 100 / (1 + rs)).iloc[-1])
 
 
+def _qqq_drawdown_from_high() -> dict | None:
+    """QQQ 52주 고점 대비 현재 낙폭. MDD 진입 구간 판단용."""
+    try:
+        df = fetch_stock_data("QQQ", period="1y")
+        if df.empty:
+            return None
+        close = df["Close"].squeeze()
+        current = float(close.iloc[-1])
+        high = float(close.max())
+        dd = (current - high) / high * 100 if high else 0.0
+        return {"current": current, "high": high, "drawdown": dd}
+    except Exception as e:
+        print(f"[qqq_dd] {e}")
+        return None
+
+
 def _calc_deployable_cash(holdings: dict[str, float], idle_cash: float) -> tuple[float, float, float]:
     """SGOV 탄약(시세×수량) + 달러잔고. (total, sgov_val, idle) 반환."""
     sgov_price = 0.0
@@ -347,7 +363,8 @@ def _lev_exposure(positions: dict, bucket: str | None = None) -> float:
 
 
 def build_correction_section(holdings: dict[str, float], idle_cash: float,
-                             total_portfolio: float, positions: dict) -> str:
+                             total_portfolio: float, positions: dict,
+                             indicators: dict | None = None) -> str:
     """
     헌법 6조 — S&P500 ATH 대비 낙폭으로 조정 단계 판정 + 행동 제시.
       -5%  : SGOV 25% → 코어(QQQM/SPYM) 추가
@@ -355,6 +372,7 @@ def build_correction_section(holdings: dict[str, float], idle_cash: float,
       -20% : SGOV 100% + UPRO/TQQQ 3x (총자산 5% 캡)
       -30% : 비상금 외 전액
     평시(-5% 미만 낙폭)엔 "자동투자만, 레버리지 금지" 안내.
+    QQQ MDD 구간 + 구조적 하락 경고 병행 표시 (MDD 전략 참조).
     """
     sp = _sp500_drawdown_from_ath()
     if sp is None:
@@ -379,6 +397,33 @@ def build_correction_section(holdings: dict[str, float], idle_cash: float,
     if sgov_val > 0 and idle > 0:
         ammo_str += f"  <i>(SGOV ${sgov_val:,.0f} + 달러 ${idle:,.0f})</i>"
     lines.append(f"  💰 매수 탄약  <b>{ammo_str}</b>")
+
+    # ── QQQ MDD 구간 표시 ─────────────────────────────────────────
+    qqq = _qqq_drawdown_from_high()
+    if qqq:
+        qqq_dd = qqq["drawdown"]
+        mdd = _config.MDD_REFERENCE
+        if qqq_dd <= mdd["TQQQ"]["avg_mdd"]:
+            zone_icon, zone_label, exp_ret = "🔴", "TQQQ 평균 MDD 구간 진입", mdd["TQQQ"]["entry_return"]
+        elif qqq_dd <= mdd["QLD"]["avg_mdd"]:
+            zone_icon, zone_label, exp_ret = "🟠", "QLD 평균 MDD 구간 진입", mdd["QLD"]["entry_return"]
+        elif qqq_dd <= mdd["QQQ"]["avg_mdd"]:
+            zone_icon, zone_label, exp_ret = "🟡", "QQQ 평균 MDD 구간 진입", mdd["QQQ"]["entry_return"]
+        elif qqq_dd <= -15:
+            zone_icon, zone_label, exp_ret = "🟡", "1차 분할 진입 구간 (-15~-20%)", None
+        else:
+            zone_icon, zone_label, exp_ret = "⚪", "관망 (-15% 미만)", None
+        ret_str = f"  기대수익 <b>+{exp_ret:.0f}%</b>" if exp_ret else ""
+        lines.append(
+            f"  QQQ  ${qqq['current']:.2f}  "
+            f"(52주 고점 대비 <b>{qqq_dd:+.1f}%</b>)  "
+            f"{zone_icon} {zone_label}{ret_str}"
+        )
+        lines.append(
+            f"  <i>MDD 평균 기준: QQQ -20.2% / QLD -30.3% / TQQQ -39.8%  (1999-2026)</i>"
+        )
+    else:
+        qqq = None  # 명시적으로 None 처리
 
     # ── 지금 행동 ──
     lines.append("")
@@ -443,6 +488,24 @@ def build_correction_section(holdings: dict[str, float], idle_cash: float,
             gap = nxt["drop"] - dd
             lines.append("")
             lines.append(f"  📉 다음 단계({nxt['drop']}%)까지  S&P <b>{gap:.1f}%</b> 추가 하락 시")
+
+    # ── 구조적 하락 경고 ──────────────────────────────────────────
+    struct_warn: list[str] = []
+    if qqq and qqq["drawdown"] <= -40:
+        struct_warn.append("QQQ -40% 초과 — 역사적 구조적 하락 구간")
+    if indicators:
+        cs = (indicators.get("credit_spread") or {})
+        if not cs.get("error") and (cs.get("value") or 0) >= 3.5:
+            struct_warn.append(f"신용스프레드 {cs['value']}% — 유동성 경색 위험 (2008형)")
+        yc = (indicators.get("yield_curve") or {})
+        if not yc.get("error") and (yc.get("value") or 0) < 0:
+            struct_warn.append(f"금리차 역전 {yc['value']:+.2f}% — 침체 경고")
+    if struct_warn:
+        lines.append("")
+        lines.append("  ⚠️ <b>구조적 하락 경고</b>  — TQQQ 진입 자제")
+        for w in struct_warn:
+            lines.append(f"    • {w}")
+        lines.append("    <i>이 신호 해소 전: TQQQ 금지, QQQ·SGOV 현금 우선</i>")
 
     lines.append("")
     lines.append("  <i>※ 매도 안 함. 탄약은 월 납입금으로 재충전.</i>")
@@ -1250,6 +1313,23 @@ def build_leverage_harvest_plan(
             f"  <i>⚠️ 전액 회복 불가 (${remaining:,.0f} 잔여 부족 — 이후 납입금으로 보완)</i>"
         )
 
+    # ── MDD 기반 분할 익절 타겟 ──────────────────────────────────
+    lines.append("")
+    lines.append("<b>📤 MDD 기반 분할 익절 타겟</b>  <i>(수익 구간별 단계 청산)</i>")
+    targets = _config.LEV_HARVEST_TARGETS  # [(30, desc), (50, desc), (100, desc)]
+    for gain_tgt, desc in targets:
+        # 현재 해당 구간에 있는 레버리지 ETF 찾기
+        at_zone = [
+            c["ticker"] for c in candidates
+            if c.get("gain_pct") is not None and c["gain_pct"] >= gain_tgt * 0.85  # 85% 도달 시 준비
+        ]
+        marker = "👉" if at_zone else "  "
+        zone_tag = f"  ← <b>{', '.join(at_zone)}</b> 구간 도달" if at_zone else ""
+        lines.append(f"  {marker} +{gain_tgt}%  {desc}{zone_tag}")
+    lines.append(
+        "  <i>TQQQ는 단기·중기 반등 전략 — 장기 보유 시 레버리지 비용 누적으로 원금 잠식</i>"
+    )
+
     lines.append("")
     lines.append("  <i>※ 레버리지는 '조정 시 임시 포지션' (헌법 5조) — ATH 근처 익절 허용.</i>")
     lines.append("  <i>코어(QQQM/SPYM/GLDM/IBIT)는 절대 매도 안 함 (헌법 7조).</i>")
@@ -1457,6 +1537,7 @@ def build_report() -> str:
     correction_section = build_correction_section(
         holdings, idle_cash, _total_portfolio,
         _ibkr["positions"] if _ibkr_ok else {},
+        indicators=indicators,
     )
     if correction_section:
         lines.append("\n" + "━" * 28)
