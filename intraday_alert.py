@@ -19,6 +19,9 @@ DROP_TIERS = [-5, -3, -2]
 COOLDOWN_SEC = 600
 INDEX_THRESHOLD = -2.0
 HOLDING_THRESHOLD = -3.0
+# 반등 후 재하락 시 재알림: 단계 기준보다 이만큼 회복하면 해당 단계 재무장
+REARM_RECOVERY_PCT = 1.0
+MAX_ALERTS_PER_DAY = 6  # 스팸 방지 상한
 
 
 def _is_market_hours() -> bool:
@@ -90,12 +93,15 @@ def _ath_trigger_status() -> dict | None:
         return None
 
 
-def _build_alert(idx_drops: list, hold_drops: list, tier: int) -> str:
+def _build_alert(idx_drops: list, hold_drops: list, tier: int, alert_no: int = 1) -> str:
     now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%H:%M KST")
     now_et  = datetime.now(ZoneInfo("America/New_York")).strftime("%H:%M ET")
     # 정신건강: '급락/패닉'이 아니라 '세일/기회'로 프레이밍 (헌법 7·12조)
     sev = "🟢🟢" if tier <= -5 else "🟢" if tier <= -3 else "🟡"
-    lines = [f"<b>{sev} 조정 = 세일 알림</b>  {now_kst} ({now_et})"]
+    no_tag = f"  (오늘 {alert_no}번째)" if alert_no > 1 else ""
+    lines = [f"<b>{sev} 조정 = 세일 알림</b>  {now_kst} ({now_et}){no_tag}"]
+    if alert_no > 1:
+        lines.append("<i>↩️ 반등 후 재하락 — 새 매수타점 가능 구간</i>")
     lines.append("━" * 28)
     lines.append("\n<i>떨어진 게 아니라 싸진 거예요. 매도 안 함. 탄약 점검만.</i>")
 
@@ -163,24 +169,42 @@ def check_and_alert(state: dict, holdings: dict) -> bool:
     state["intraday_last_check"] = now_ts
     _prune_old_keys(state)
 
+    # 지수 변동 조회 — 재무장 판정을 위해 하락 여부와 무관하게 전부 수집
+    changes = []
     idx_drops = []
     for sym, name in INDICES:
         price, chg = _intraday_change(sym)
-        if chg is not None and chg <= INDEX_THRESHOLD:
+        if chg is None:
+            continue
+        changes.append(chg)
+        if chg <= INDEX_THRESHOLD:
             idx_drops.append((sym, name, price, chg))
 
-    if not idx_drops:
+    if not changes:
         return False
-
-    worst = min(d[3] for d in idx_drops)
-    tier = next((t for t in DROP_TIERS if worst <= t), None)
-    if tier is None:
-        return False
+    worst = min(changes)
 
     today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     alerted_key = f"intraday_{today}"
-    alerted = state.get(alerted_key, [])
-    if tier in alerted:
+    rec = state.get(alerted_key)
+    if isinstance(rec, list):           # 구버전 포맷 호환
+        rec = {"tiers": rec, "count": len(rec)}
+    elif not isinstance(rec, dict):
+        rec = {"tiers": [], "count": 0}
+
+    # 재무장: 단계 기준보다 REARM_RECOVERY_PCT 이상 회복하면 같은 단계 재알림 허용
+    # 예: -2% 알림 후 -0.9%까지 반등 → 다시 -2% 떨어지면 새 매수타점으로 재알림
+    rec["tiers"] = [t for t in rec["tiers"] if worst <= t + REARM_RECOVERY_PCT]
+    state[alerted_key] = rec
+
+    if not idx_drops:
+        return False
+    tier = next((t for t in DROP_TIERS if worst <= t), None)
+    if tier is None:
+        return False
+    if tier in rec["tiers"]:
+        return False
+    if rec["count"] >= MAX_ALERTS_PER_DAY:
         return False
 
     hold_drops = []
@@ -192,9 +216,11 @@ def check_and_alert(state: dict, holdings: dict) -> bool:
             hold_drops.append((ticker, price, chg))
     hold_drops.sort(key=lambda x: x[2])
 
-    msg = _build_alert(idx_drops, hold_drops, tier)
+    msg = _build_alert(idx_drops, hold_drops, tier, alert_no=rec["count"] + 1)
     if not send_message(msg):
         return False
 
-    state[alerted_key] = alerted + [tier]
+    rec["tiers"].append(tier)
+    rec["count"] += 1
+    state[alerted_key] = rec
     return True
