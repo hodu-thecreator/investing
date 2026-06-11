@@ -4,6 +4,7 @@
 실행: python -m unittest tests.test_decision_logic -v
 """
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -195,6 +196,55 @@ class TestCoreTrim(unittest.TestCase):
         self.assertIn("QQQM", out)
         self.assertIn("RSI 75", out)
         self.assertNotIn("SPYM", out)
+
+    def test_cash_depleted_triggers_without_ath(self):
+        """현금이 사실상 0%면 ATH 근접 여부와 무관하게 트림 안내 (2026.6 신설)."""
+        out = self.build(-8.0, 0.0, 0.20, self.judged_hot, self.holdings)
+        self.assertIn("QQQM", out)
+        self.assertIn("사실상 0%", out)
+
+    def test_cash_depleted_but_no_overheated_skips(self):
+        cool = {t: {"rsi": 50} for t in self.judged_hot}
+        out = self.build(-8.0, 0.0, 0.20, cool, self.holdings)
+        self.assertEqual(out, "")
+
+
+class TestSatelliteCandidates(unittest.TestCase):
+    """위성 한도(2개) 유지 + 통과 종목은 정보성 후보로만 기록 (2026.6 신설)."""
+
+    def setUp(self):
+        import idea_check
+        self.idea_check = idea_check
+        self._orig_file = idea_check.CANDIDATES_FILE
+        self._tmpdir = tempfile.TemporaryDirectory()
+        idea_check.CANDIDATES_FILE = Path(self._tmpdir.name) / "satellite_candidates.json"
+
+    def tearDown(self):
+        self.idea_check.CANDIDATES_FILE = self._orig_file
+        self._tmpdir.cleanup()
+
+    def test_save_and_load_roundtrip(self):
+        self.idea_check._save_candidate(
+            "SCHG", {"name": "Schwab US Large-Cap Growth ETF", "expense_pct": 0.04, "aum": 3.0e10}
+        )
+        candidates = self.idea_check._load_candidates()
+        self.assertIn("SCHG", candidates)
+        self.assertEqual(candidates["SCHG"]["expense_pct"], 0.04)
+        self.assertIn("first_seen", candidates["SCHG"])
+
+    def test_load_missing_file_returns_empty(self):
+        self.assertEqual(self.idea_check._load_candidates(), {})
+
+    def test_core_trim_notes_recorded_candidates(self):
+        from core_trim import build_core_trim_section
+        self.idea_check._save_candidate("SCHG", {"name": "Schwab US Large-Cap Growth ETF"})
+        holdings = {"QQQM": 100, "SPYM": 100, "GLDM": 50, "IBIT": 10}
+        judged_hot = {
+            "QQQM": {"rsi": 75}, "SPYM": {"rsi": 60}, "GLDM": {"rsi": 40}, "IBIT": {"rsi": 50},
+        }
+        out = build_core_trim_section(-1.0, 0.12, 0.20, judged_hot, holdings)
+        self.assertIn("SCHG", out)
+        self.assertIn("위성 교체 후보", out)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,9 @@ on:
     - cron: "* * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   handle-commands:
     runs-on: ubuntu-latest
@@ -51,6 +54,17 @@ jobs:
           IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
           IBKR_FLEX_QUERY_ID: ${{ secrets.IBKR_FLEX_QUERY_ID }}
         run: python bot_once.py
+
+      - name: Commit satellite candidate notes
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain -- data/satellite_candidates.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add data/satellite_candidates.json
+            git commit -m "chore: 위성 교체 후보 기록 갱신 ($(date +%Y-%m-%d))"
+            git push origin HEAD:main
+          fi
 
       - name: Backup transactions to Gist
         if: always()

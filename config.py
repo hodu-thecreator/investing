@@ -95,6 +95,8 @@ class Config:
     CORE_TRIM_RSI = 70           # 이 RSI 이상이면 과열
     CORE_TRIM_CASH_GAP = 0.03    # 현금 비중이 목표보다 이만큼(%p) 부족하면 트리거
     CORE_TRIM_PCT = 0.05         # 과열 종목의 5%만 부분 익절
+    # 현금이 사실상 0%면 ATH 근접 조건 없이도 트림 검토 (2026.6 신설)
+    CORE_TRIM_CASH_FLOOR = 0.01
 
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
     # SOXQ는 2026.6 위성 승격, SOXL/USD는 반도체 레버 노출로 분류 → 레거시 제외

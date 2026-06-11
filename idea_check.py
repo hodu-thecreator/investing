@@ -6,7 +6,9 @@
 자동 확인 가능한 항목(트랙레코드·보수·규모·5종목 원칙)은 데이터로 판정,
 나머지는 체크리스트로 제시. 8문 중 7개 미만 통과 → 즉시 거부.
 """
+import json
 from datetime import datetime
+from pathlib import Path
 
 from config import Config
 
@@ -16,6 +18,30 @@ MIN_TRACK_YEARS = 15        # ETF 외 (사실상 금지 — 개별주는 8문 �
 MIN_TRACK_YEARS_ETF = 5     # 지수 ETF — 2026.6 헌법 개정 (기존 15년)
 MAX_EXPENSE_PCT = 0.15
 MIN_AUM_USD = 10_000_000_000
+
+# 위성 한도(2개)는 꽉 찼지만, 트랙레코드/보수/규모를 모두 통과한 종목은
+# "위성 교체 후보"로 정보성 기록만 해둔다 (8조 재심사 자료, 2026.6 신설).
+CANDIDATES_FILE = Path(__file__).parent / "data" / "satellite_candidates.json"
+
+
+def _load_candidates() -> dict:
+    try:
+        return json.loads(CANDIDATES_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_candidate(ticker: str, info: dict) -> None:
+    candidates = _load_candidates()
+    candidates[ticker] = {
+        "name": info.get("name"),
+        "expense_pct": info.get("expense_pct"),
+        "aum": info.get("aum"),
+        "first_seen": candidates.get(ticker, {}).get("first_seen", datetime.now().strftime("%Y-%m-%d")),
+        "last_seen": datetime.now().strftime("%Y-%m-%d"),
+    }
+    CANDIDATES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CANDIDATES_FILE.write_text(json.dumps(candidates, ensure_ascii=False, indent=2))
 
 
 def _fetch_fund_info(ticker: str) -> dict:
@@ -133,6 +159,18 @@ def evaluate(ticker: str) -> str:
             f" 나머지 ❔를 직접 확인해도 7문 넘기 어려움"
         )
     lines.append("<i>디폴트: 무시. 자산의 99%는 5종목으로 결정됩니다.</i>")
+
+    # 트랙레코드·보수·규모(1~3번)를 모두 통과하면 — 위성 한도(2개)는 그대로 두되
+    # "위성 교체 후보"로만 정보성 기록 (8조 재심사 시 참고, 자동 추가 아님).
+    auto_passed = sum(1 for _, ok, _ in checks[:3] if ok is True)
+    if auto_passed == 3:
+        _save_candidate(ticker, info)
+        lines.append("")
+        lines.append(
+            f"<b>📌 정보성 기록</b>: 트랙레코드·보수·규모 통과 — 위성(SPMO/SOXQ) "
+            f"교체 검토 시 후보로 기록해둠 (8조 재심사 필요, 자동 추가 아님)"
+        )
+
     return "\n".join(lines)
 
 
