@@ -1663,6 +1663,17 @@ def build_report() -> str:
     except Exception as e:
         print(f"[kr_tax] {e}")
 
+    # ── [11-b] 자산 추이 (1주/1개월/1년 전 대비, ATH 워터마크) ────
+    try:
+        import asset_history
+        history = asset_history.record_snapshot(_total_portfolio)
+        hist_section = asset_history.build_asset_history_section(_total_portfolio, history)
+        if hist_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(hist_section)
+    except Exception as e:
+        print(f"[asset_history] {e}")
+
     # ── [12] 마일스톤 진행률 (동기 부여 — 클로저) ─────────────────
     try:
         ms_section = build_milestone_section(_total_portfolio)
