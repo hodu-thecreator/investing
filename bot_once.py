@@ -443,6 +443,21 @@ def handle_idea(chat_id: int, arg: str):
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
 
+def handle_dip(chat_id: int):
+    try:
+        send_message("⏳ 저수지 수위 측정 중...", chat_id=str(chat_id))
+        import reservoir
+        from rebalancing import calc_portfolio_state
+        holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config)
+        try:
+            state = calc_portfolio_state(holdings, idle_cash)
+        except Exception:
+            state = None
+        send_message(reservoir.build_reservoir_section(state), chat_id=str(chat_id))
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
 def handle_help(chat_id: int):
     send_message(
         "<b>📖 사용 가능한 명령어</b>\n\n"
@@ -450,7 +465,8 @@ def handle_help(chat_id: int):
         "/now [만원] — 지금 할 일 한 방에 (트리거 판정 + 납입 배분)\n"
         "/goal — 마일스톤별 예상 도달 시기\n"
         "/tax — 양도세 250만원 공제 매도 플랜\n"
-        "/idea TICKER — 새 종목 8문 통과제 판정\n\n"
+        "/idea TICKER — 새 종목 8문 통과제 판정\n"
+        "/dip — 저수지 수위 (종목별 낙폭 → 어디에 쏠지)\n\n"
         "<b>📊 브리핑</b>\n"
         "/briefing — 투자 브리핑 + 취향서랍 소재 한 번에\n"
         "/report — 투자 판단 브리핑만\n"
@@ -510,6 +526,8 @@ def dispatch(message: dict, state: dict):
         handle_tax(chat_id)
     elif cmd == "/idea":
         handle_idea(chat_id, arg)
+    elif cmd in ("/dip", "/water"):
+        handle_dip(chat_id)
     elif cmd == "/briefing":
         handle_full_briefing(chat_id)
     elif cmd == "/report":
@@ -577,6 +595,7 @@ def main():
         print(f"getUpdates 실패: {e}")
 
     # ── 장중 급락 알림 (미국장 시간 + 10분 throttle 내부에서 처리) ──
+    holdings = None
     try:
         import intraday_alert
         holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config)
@@ -584,6 +603,14 @@ def main():
             print(f"[{datetime.now():%H:%M:%S}] 장중 급락 알림 발송")
     except Exception as e:
         print(f"[intraday] 오류: {e}")
+
+    # ── 저수지 구간 진입 알림 (종목별 52주 고점 낙폭, 15분 throttle) ──
+    try:
+        import reservoir
+        if reservoir.check_zone_alerts(state, holdings):
+            print(f"[{datetime.now():%H:%M:%S}] 저수지 진입 알림 발송")
+    except Exception as e:
+        print(f"[reservoir] 오류: {e}")
 
     _save_state(state)
 

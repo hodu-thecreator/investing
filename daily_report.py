@@ -1573,6 +1573,17 @@ def build_report() -> str:
         lines.append("\n" + "━" * 28)
         lines.append(correction_section)
 
+    # ── [4-b] 저수지 수위 (종목별 52주 고점 낙폭 — 어디에 쏠지) ────
+    try:
+        import reservoir
+        res_state = calc_portfolio_state(holdings, idle_cash) if _ibkr_ok else None
+        res_section = reservoir.build_reservoir_section(res_state)
+        if res_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(res_section)
+    except Exception as e:
+        print(f"[reservoir] {e}")
+
     # ── [6] 다가오는 이벤트 캘린더 ────────────────────────────────
     cal_section = build_calendar_section(holdings, days_ahead=14)
     if cal_section:

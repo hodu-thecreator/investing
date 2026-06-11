@@ -4,12 +4,13 @@ load_dotenv()
 
 class Config:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "QQQM,SPYM,GLDM,IBIT,SGOV,QLD,TQQQ,SSO,UPRO").split(",")
+    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "QQQM,SPYM,GLDM,IBIT,SGOV,SPMO,QLD,TQQQ,SSO,UPRO").split(",")
     WATCH_CRYPTO = os.getenv("WATCH_CRYPTO", "bitcoin,ethereum,solana").split(",")
     # 적립·모니터링 대상 포트폴리오
     ACCUMULATION_PORTFOLIO = os.getenv(
         "ACCUMULATION_PORTFOLIO",
         "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM 미보유 → 목표)
+        "SPMO,"                            # 위성 (상한 10%, 저수지 구간 매수)
         "QLD,TQQQ,SSO,UPRO,"              # 레버리지 (조정 시 전술)
         "QQQI,SPYI",                       # 레거시 (정리 중)
     ).replace(" ", "").split(",")
@@ -61,6 +62,25 @@ class Config:
         "QLD": "QQQM", "TQQQ": "QQQM",     # Nasdaq 노출
         "SSO": "SPYM", "UPRO": "SPYM",     # S&P 노출
     }
+
+    # ── 위성(satellite) 지수 ETF — 2026.6 헌법 개정 ──────────────
+    # 개별주 금지는 유지. 지수 ETF는 트랙레코드 5년+로 완화.
+    # 위성은 코어를 대체하지 않음: 해당 버킷 안에서 상한까지만,
+    # 매수는 저수지(웅덩이) 구간에서 신규자금·배당·레거시 정리 대금으로만.
+    SATELLITE_TICKERS: dict[str, float] = {"SPMO": 0.10}   # 총자산 대비 상한
+    SATELLITE_BUCKET: dict[str, str] = {"SPMO": "SPYM"}    # S&P500 버킷에 합산
+
+    # ── 저수지(웅덩이) 매수 구간 — 52주 고점 대비 종목별 낙폭 ────
+    # 역할 분담: 얼마 쏠지 = 헌법 6조 S&P ATH 트리거 / 어디에 쏠지 = 종목별 수위
+    # scale: 변동성 큰 자산은 같은 의미의 낙폭이 더 깊음 (IBIT ≈ 주식 3배)
+    RESERVOIR_ZONES: list[dict] = [
+        {"dd": -3,  "label": "🌦 얕은 웅덩이", "action": "이번 달 납입·배당 매수를 앞당겨 실행"},
+        {"dd": -7,  "label": "🟠 저수지",      "action": "분할 매수 1차 — 탄약 비율은 헌법 6조 트리거"},
+        {"dd": -15, "label": "🔴 깊은 저수지", "action": "분할 매수 2차 — 역사적 기대수익 구간"},
+        {"dd": -25, "label": "🟣 댐 바닥",     "action": "최대 매수 구간 — 비상금 외 적극 매수"},
+    ]
+    RESERVOIR_SCALE: dict[str, float] = {"IBIT": 3.0}
+    RESERVOIR_WATCH: list[str] = ["QQQM", "SPYM", "SPMO", "GLDM", "IBIT"]
 
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
     LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXQ", "SOXL", "SOXX", "USD",

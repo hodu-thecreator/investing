@@ -25,9 +25,9 @@ _config = Config()
 TARGET_ALLOCATION: dict[str, dict] = {
     "S&P500": {
         "target": 0.30,
-        "tickers": ["SPYM", "SSO", "UPRO"],   # SSO/UPRO = S&P 레버 노출
+        "tickers": ["SPYM", "SPMO", "SSO", "UPRO"],   # SPMO = 위성(상한 10%), SSO/UPRO = 레버 노출
         "preferred": ["SPYM"],
-        "note": "조정 시 SSO/UPRO 임시 매수 — 평시엔 SPYM",
+        "note": "조정 시 SSO/UPRO 임시 매수 — 평시엔 SPYM, 위성 SPMO는 저수지 구간만",
     },
     "Nasdaq100": {
         "target": 0.30,

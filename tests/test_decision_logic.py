@@ -132,5 +132,36 @@ class TestPlanSales(unittest.TestCase):
         self.assertEqual(plan_sales({}, 0, self.legacy, self.core), [])
 
 
+class TestReservoirClassify(unittest.TestCase):
+    """저수지 수위 분류 — 헌법 6조 저수지 매수 가이드 (2026.6 개정)."""
+
+    def setUp(self):
+        from reservoir import classify
+        self.classify = classify
+
+    def test_full_water(self):
+        idx, zone = self.classify(-1.0)
+        self.assertEqual(idx, 0)
+        self.assertIsNone(zone)
+
+    def test_zone_boundaries(self):
+        for dd, want in [(-3.0, 1), (-6.9, 1), (-7.0, 2), (-15.0, 3), (-25.0, 4), (-50.0, 4)]:
+            idx, _ = self.classify(dd)
+            self.assertEqual(idx, want, f"dd={dd}")
+
+    def test_volatility_scale(self):
+        # IBIT(×3): -8%는 만수위(기준 -9%), -22%는 저수지(기준 -21%), -75%는 댐 바닥
+        self.assertEqual(self.classify(-8.0, scale=3.0)[0], 0)
+        self.assertEqual(self.classify(-22.0, scale=3.0)[0], 2)
+        self.assertEqual(self.classify(-75.0, scale=3.0)[0], 4)
+
+    def test_monotonic_in_drawdown(self):
+        prev = 0
+        for dd in range(0, -60, -1):
+            idx, _ = self.classify(float(dd))
+            self.assertGreaterEqual(idx, prev)
+            prev = idx
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -12,18 +12,21 @@ from config import Config
 
 _config = Config()
 
-MIN_TRACK_YEARS = 15
+MIN_TRACK_YEARS = 15        # ETF 외 (사실상 금지 — 개별주는 8문 이전 즉시 거부)
+MIN_TRACK_YEARS_ETF = 5     # 지수 ETF — 2026.6 헌법 개정 (기존 15년)
 MAX_EXPENSE_PCT = 0.15
 MIN_AUM_USD = 10_000_000_000
 
 
 def _fetch_fund_info(ticker: str) -> dict:
     """yfinance에서 상장일·보수·규모 조회. 실패한 필드는 None."""
-    out = {"inception": None, "expense_pct": None, "aum": None, "name": None}
+    out = {"inception": None, "expense_pct": None, "aum": None, "name": None,
+           "quote_type": None}
     try:
         import yfinance as yf
         info = yf.Ticker(ticker).info or {}
         out["name"] = info.get("longName") or info.get("shortName")
+        out["quote_type"] = info.get("quoteType")
         epoch = info.get("fundInceptionDate")
         if epoch:
             out["inception"] = datetime.fromtimestamp(epoch)
@@ -55,17 +58,34 @@ def evaluate(ticker: str) -> str:
             f"🗑 <b>{ticker}</b>는 청산 예정 레거시입니다 (헌법 5조).\n"
             f"신규 매수 금지 — /tax 로 세금 0 정리 플랜을 확인하세요."
         )
+    if ticker in _config.SATELLITE_TICKERS:
+        cap = _config.SATELLITE_TICKERS[ticker] * 100
+        return (
+            f"🛰 <b>{ticker}</b>는 승인된 위성입니다 (헌법 5조, 상한 {cap:.0f}%).\n"
+            f"매수는 저수지 구간에서만 — /dip 으로 수위를 확인하세요."
+        )
 
     info = _fetch_fund_info(ticker)
     checks: list[tuple[str, bool | None, str]] = []  # (질문, 통과여부, 근거)
 
-    # 1. 트랙레코드 15년+
+    # 헌법 4조: 개별주는 8문 이전 즉시 거부
+    if info["quote_type"] == "EQUITY":
+        name = f" ({info['name']})" if info["name"] else ""
+        return (
+            f"⛔ <b>{ticker}</b>{name} — <b>개별주는 예외 없이 금지</b> (헌법 4조).\n"
+            f"8문 통과제 이전에 거부됩니다. 지수 ETF만 검토 대상입니다."
+        )
+
+    # 1. 트랙레코드 — 지수 ETF는 5년+, 그 외 15년+ (2026.6 개정)
+    is_etf = info["quote_type"] == "ETF"
+    min_years = MIN_TRACK_YEARS_ETF if is_etf else MIN_TRACK_YEARS
+    rule_tag = "지수 ETF 기준" if is_etf else "ETF 미확인 — 15년 기준"
     if info["inception"]:
         years = (datetime.now() - info["inception"]).days / 365.25
-        checks.append((f"트랙레코드 {MIN_TRACK_YEARS}년+", years >= MIN_TRACK_YEARS,
+        checks.append((f"트랙레코드 {min_years}년+ ({rule_tag})", years >= min_years,
                        f"{info['inception']:%Y.%m} 상장 ({years:.1f}년)"))
     else:
-        checks.append((f"트랙레코드 {MIN_TRACK_YEARS}년+", None, "상장일 확인 불가"))
+        checks.append((f"트랙레코드 {min_years}년+ ({rule_tag})", None, "상장일 확인 불가"))
 
     # 2. 보수 0.15% 이하
     if info["expense_pct"] is not None:
@@ -85,9 +105,9 @@ def evaluate(ticker: str) -> str:
     checks.append(("출처가 Bloomberg/Reuters급", None, "직접 확인"))
     checks.append(("주요 기관 보고서에 존재", None, "직접 확인"))
 
-    # 6~7. 자산배분 빈자리 / 5종목 원칙 — 자동 (코어가 아니므로 둘 다 실패)
-    checks.append(("현재 자산배분에 빈 자리", False, "코어 5종목 꽉 참"))
-    checks.append(("5종목 단순 원칙 유지", False, f"{ticker} 추가 시 6종목"))
+    # 6~7. 자산배분 빈자리 / 단순 원칙 — 자동 (코어5+위성1 꽉 참 → 위성 교체만 가능)
+    checks.append(("현재 자산배분에 빈 자리", False, "코어5+위성1 꽉 참 (위성 교체만 가능)"))
+    checks.append(("코어5+위성1 단순 원칙 유지", False, f"{ticker} 추가 시 초과"))
 
     # 8. 30년 보유 가능 — 수동
     checks.append(("20~30년 보유 가능", None, "스스로에게 질문"))
