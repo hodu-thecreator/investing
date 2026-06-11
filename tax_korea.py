@@ -115,7 +115,7 @@ def build_tax_message() -> str:
     if today >= phase_end:
         return (
             "🇳🇿 한국 phase 종료 — NZ Transitional 기간은 양도차익 면세.\n"
-            "재배분 최적기입니다 (헌법 9조)."
+            "재배분 최적기입니다."
         )
 
     from action_plan import usd_krw_rate
@@ -174,7 +174,7 @@ def build_tax_message() -> str:
     lines.append("")
     lines.append(f"  합계 실현 차익  <b>${total_gain:,.0f}</b> (≈₩{total_gain*fx:,.0f})")
     lines.append("  ⏰ 결제일(T+1) 기준 과세연도 — 12월 마지막 거래일 전까지 실행")
-    lines.append("  <i>헌법 7조: 세금 최적화는 유일하게 허용된 매도입니다.</i>")
+    lines.append("  <i>세금 최적화는 유일하게 허용된 매도입니다.</i>")
     return "\n".join(lines)
 
 

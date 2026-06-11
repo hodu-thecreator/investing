@@ -39,6 +39,8 @@ class Config:
     TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.20"))
     CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
     IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "50.65"))  # 미사용 USD 잔고
+    # 배당이 USD로 이만큼 이상 쌓여 있으면 "노는 돈" 알림 (DRIP 대신 모아서 웅덩이에 투입)
+    IDLE_CASH_ALERT_USD = float(os.getenv("IDLE_CASH_ALERT_USD", "150"))
 
     # ── 정기 적립 스케줄 (자동 매수 비활성화) ───────────────────
     DCA_SCHEDULE: dict[str, dict] = {}
@@ -78,7 +80,7 @@ class Config:
     # scale: 변동성 큰 자산은 같은 의미의 낙폭이 더 깊음 (IBIT ≈ 주식 3배)
     RESERVOIR_ZONES: list[dict] = [
         {"dd": -3,  "label": "🌦 얕은 웅덩이", "action": "이번 달 납입·배당 매수를 앞당겨 실행"},
-        {"dd": -7,  "label": "🟠 저수지",      "action": "분할 매수 1차 — 탄약 비율은 헌법 6조 트리거"},
+        {"dd": -7,  "label": "🟠 저수지",      "action": "분할 매수 1차 — 탄약 비율은 ATH 트리거"},
         {"dd": -15, "label": "🔴 깊은 저수지", "action": "분할 매수 2차 — 역사적 기대수익 구간"},
         {"dd": -25, "label": "🟣 댐 바닥",     "action": "최대 매수 구간 — 비상금 외 적극 매수"},
     ]
@@ -93,6 +95,10 @@ class Config:
     CORE_TRIM_RSI = 70           # 이 RSI 이상이면 과열
     CORE_TRIM_CASH_GAP = 0.03    # 현금 비중이 목표보다 이만큼(%p) 부족하면 트리거
     CORE_TRIM_PCT = 0.05         # 과열 종목의 5%만 부분 익절
+    # 현금이 사실상 0%면 ATH 근접 조건 없이도 트림 검토 (2026.6 신설)
+    CORE_TRIM_CASH_FLOOR = 0.01
+    # 과열이어도 신고가 행진 중(자체 고점 근처)이면 안 팖 — 고점에서 이만큼 꺾여야 제안
+    CORE_TRIM_PULLBACK = -1.5
 
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
     # SOXQ는 2026.6 위성 승격, SOXL/USD는 반도체 레버 노출로 분류 → 레거시 제외

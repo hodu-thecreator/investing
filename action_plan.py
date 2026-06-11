@@ -105,6 +105,30 @@ def estimate_monthly_dividend_usd(holdings: dict) -> float:
     return total_annual / 12
 
 
+# ── SGOV 매수 타이밍 — 배당락 지난 월 첫 거래일에 모아서 매수 ──────
+
+def sgov_buy_note() -> str:
+    """SGOV 분배금은 매월 말 배당락 → 월 첫 거래일이 락 지난 시점.
+    그 외 날짜엔 모아뒀다가 첫 거래일에 한 번에 매수."""
+    try:
+        import yfinance as yf
+        df = yf.Ticker("SPY").history(period="1mo")
+        if df is None or df.empty:
+            return ""
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        this_month_days = sorted({
+            d.date() for d in df.index
+            if d.date().year == today.year and d.date().month == today.month
+        })
+        if not this_month_days:
+            return ""
+        if today == this_month_days[0]:
+            return "  <i>✅ 오늘 월 첫 거래일 — 배당락 지남, SGOV 매수 적기</i>"
+        return "  <i>⏳ SGOV는 월 첫 거래일에 모아서 매수 — 그때까지 대기</i>"
+    except Exception:
+        return ""
+
+
 # ── 마일스톤 ETA ─────────────────────────────────────────────────
 
 def months_to_target(
@@ -242,6 +266,10 @@ def build_now_message(
             tgt = state["categories"][cat]["target_pct"] * 100
             gap_note = f"{cur:.0f}%→{tgt:.0f}%" if cur < tgt - 0.5 else "비중 유지"
             lines.append(f"  <b>{ticker}</b>  ${amt:,.0f}  <i>{gap_note}</i>")
+            if ticker == "SGOV":
+                note = sgov_buy_note()
+                if note:
+                    lines.append(note)
         lines.append(no_sale_note)
 
     # 3) 마일스톤 한 줄

@@ -596,6 +596,7 @@ def main():
 
     # ── 장중 급락 알림 (미국장 시간 + 10분 throttle 내부에서 처리) ──
     holdings = None
+    idle_cash = 0.0
     try:
         import intraday_alert
         holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config)
@@ -607,7 +608,7 @@ def main():
     # ── 저수지 구간 진입 알림 (종목별 52주 고점 낙폭, 15분 throttle) ──
     try:
         import reservoir
-        if reservoir.check_zone_alerts(state, holdings):
+        if reservoir.check_zone_alerts(state, holdings, idle_cash):
             print(f"[{datetime.now():%H:%M:%S}] 저수지 진입 알림 발송")
     except Exception as e:
         print(f"[reservoir] 오류: {e}")

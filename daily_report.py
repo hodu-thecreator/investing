@@ -243,10 +243,16 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
             f"  🔋 탄약 {abs(diff_pct):.1f}%p 소진 (${-diff_usd:,.0f}) "
             f"— 월 납입으로 약 {months:.0f}개월 재충전"
         )
-        lines.append("  <i>매도 안 함 (헌법 7조). 조정 매수에 쓴 탄약은 납입금으로 채움.</i>")
+        lines.append("  <i>매도 안 함. 조정 매수에 쓴 탄약은 납입금으로 채움.</i>")
 
     if risk_signals:
         lines.append(f"  <i>위험 신호: {' · '.join(risk_signals[:3])}</i>")
+
+    # 노는 돈 감지 — 배당이 USD로 쌓여만 있으면 안내 (DRIP 대신 웅덩이에 투입)
+    if idle_cash >= _config.IDLE_CASH_ALERT_USD:
+        lines.append(
+            f"  💤 노는 USD <b>${idle_cash:,.0f}</b> — 웅덩이 열리면 1순위 투입 (저수지 섹션 참고)"
+        )
 
     return "\n".join(lines), available_cash, total_value
 
@@ -1037,7 +1043,7 @@ def build_action_plan(
             [
                 f"위험점수 {risk_score} — 침체/거품 신호",
                 "신규 레버리지 금지, SGOV 탄약 비축",
-                "매도 안 함 (헌법 7조). 조정 오면 기계적 매수.",
+                "매도 안 함. 조정 오면 기계적 매수.",
             ],
         ))
 
@@ -1331,8 +1337,8 @@ def build_leverage_harvest_plan(
     )
 
     lines.append("")
-    lines.append("  <i>※ 레버리지는 '조정 시 임시 포지션' (헌법 5조) — ATH 근처 익절 허용.</i>")
-    lines.append("  <i>코어(QQQM/SPYM/GLDM/IBIT)는 절대 매도 안 함 (헌법 7조).</i>")
+    lines.append("  <i>※ 레버리지는 '조정 시 임시 포지션' — ATH 근처 익절 허용.</i>")
+    lines.append("  <i>코어(QQQM/SPYM/GLDM/IBIT)는 절대 매도 안 함.</i>")
     return "\n".join(lines)
 
 
@@ -1540,12 +1546,27 @@ def build_report() -> str:
                    if q and q > 0.01 and t in LEGACY_TICKERS]
     if legacy_held:
         lines.append("")
-        lines.append("<b>🗂 레거시 보유 (헌법 외 — 정리 예정)</b>")
+        lines.append("<b>🗂 레거시 보유 (정리 예정)</b>")
         for t, q in sorted(legacy_held):
             r = judge_ticker(t, mkt_score)
             p = r.get("price") or 0
             lines.append(f"  • <b>{t}</b>  {q:g}주  ${p:.2f}")
         lines.append("  <i>신규 매수 금지. 세금 룰(한국 양도세 공제·NZ 면세기)에 맞춰 정리.</i>")
+
+    # ── [2-b2] 새 종목 매수 감지 — 어느 그룹에도 없는 보유분 ──────────
+    # 호두가 새 위성을 실제로 매수하면: 알려주고 비중/전략 재설계를 요청하게 안내
+    known = (set(_config.CORE_ALLOCATION) | set(_config.SATELLITE_TICKERS)
+             | set(_config.LEVERAGE_BUCKET) | LEGACY_TICKERS
+             | set(_config.CASH_TICKERS))
+    new_held = [(t, q) for t, q in holdings.items()
+                if q and q > 0.01 and t not in known]
+    if new_held:
+        lines.append("")
+        lines.append("<b>🆕 새 종목 매수 감지</b>")
+        for t, q in sorted(new_held):
+            lines.append(f"  • <b>{t}</b>  {q:g}주")
+        lines.append("  <i>아직 목표 비중에 없는 종목 — 비중·전략 재설계가 필요함.")
+        lines.append("  봇 세션에서 \"새 종목 반영해줘\"라고 요청하면 전체 파이를 다시 짬.</i>")
 
     # ── [2-c] 개별주 워치 (정보용 — 이 계좌는 매수 안 함, 헌법 4조) ──
     watchlist = getattr(_config, "INDIVIDUAL_WATCHLIST", [])
@@ -1553,7 +1574,7 @@ def build_report() -> str:
         try:
             import reservoir
             lines.append("\n" + "━" * 28)
-            lines.append("<b>👀 개별주 워치</b>  <i>(정보용 — 이 계좌는 매수 안 함, 헌법 4조)</i>")
+            lines.append("<b>👀 개별주 워치</b>  <i>(정보용 — 이 계좌는 매수 안 함)</i>")
             for t in watchlist:
                 r = judge_ticker(t, mkt_score)
                 price = r.get("price")
@@ -1666,7 +1687,7 @@ def build_report() -> str:
 
     # ── [8-b] 이번 달 재투자 배분 (배당 + 신규 납입 → 언더웨이트 수렴) ──
     try:
-        from action_plan import estimate_monthly_dividend_usd, split_deposit, usd_krw_rate
+        from action_plan import estimate_monthly_dividend_usd, split_deposit, usd_krw_rate, sgov_buy_note
         div_usd = estimate_monthly_dividend_usd(holdings)
         deposit_krw = _config.MONTHLY_DEPOSIT_KRW
         deposit_usd = div_usd + (deposit_krw / usd_krw_rate() if deposit_krw > 0 else 0)
@@ -1686,6 +1707,10 @@ def build_report() -> str:
                     tgt = alloc_state["categories"][cat]["target_pct"] * 100
                     gap_note = f"{cur:.0f}%→{tgt:.0f}%" if cur < tgt - 0.5 else "비중 유지"
                     lines.append(f"  <b>{ticker}</b>  ${amt:,.0f}  <i>{gap_note}</i>")
+                    if ticker == "SGOV":
+                        note = sgov_buy_note()
+                        if note:
+                            lines.append(note)
                 lines.append("  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴 (매도 없음)</i>")
     except Exception as e:
         print(f"[reinvest_plan] {e}")

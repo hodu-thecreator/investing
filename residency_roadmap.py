@@ -59,7 +59,7 @@ def build_roadmap_section(state: dict | None = None) -> str:
         if total > 0 and legacy_value > 0:
             pct = legacy_value / total * 100
             lines.append(
-                f"  레거시(헌법 외) 비중  ${legacy_value:,.0f}  ({pct:.1f}%)  — phase 세금 룰 따라 정리"
+                f"  레거시 비중  ${legacy_value:,.0f}  ({pct:.1f}%)  — phase 세금 룰 따라 정리"
             )
 
     return "\n".join(lines)
