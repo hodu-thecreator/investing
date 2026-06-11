@@ -76,6 +76,21 @@ def plan_sales(
     return plan
 
 
+def realized_ytd_usd(ibkr: dict | None = None) -> float:
+    """올해 실현손익(USD) — IBKR Flex 체결 우선, 실패 시 거래기록(.transactions.json) 폴백."""
+    if ibkr and ibkr.get("error") is None:
+        from ibkr_flex import realized_ytd_from_trades
+        val = realized_ytd_from_trades(ibkr.get("trades", []))
+        if val:
+            return val
+    try:
+        from transactions import realized_ytd
+        return realized_ytd()
+    except Exception as e:
+        print(f"[tax] realized_ytd 실패: {e}")
+        return 0.0
+
+
 def _positions_from_transactions() -> dict:
     """IBKR 실패 시 거래기록 기반 폴백 → plan_sales 입력 포맷으로 변환."""
     try:
@@ -106,12 +121,9 @@ def build_tax_message() -> str:
     from action_plan import usd_krw_rate
     fx = usd_krw_rate()
 
-    realized_usd = 0.0
-    try:
-        from transactions import realized_ytd
-        realized_usd = realized_ytd()
-    except Exception as e:
-        print(f"[tax] realized_ytd 실패: {e}")
+    import ibkr_flex
+    ibkr = ibkr_flex.get_account_data()
+    realized_usd = realized_ytd_usd(ibkr)
 
     realized_krw = max(realized_usd * fx, _config.KR_CGT_REALIZED_KRW_OVERRIDE)
     headroom_krw = _config.KR_CGT_DEDUCTION_KRW - realized_krw
@@ -129,8 +141,6 @@ def build_tax_message() -> str:
 
     lines.append(f"  공제 활용 시 절세  <b>₩{headroom_krw * KR_CGT_RATE:,.0f}</b> (22%)")
 
-    import ibkr_flex
-    ibkr = ibkr_flex.get_account_data()
     positions = ibkr["positions"] if not ibkr["error"] else _positions_from_transactions()
     if not positions:
         lines.append("\n  ❌ 포지션 조회 실패 — /ibkrsync 후 재시도")

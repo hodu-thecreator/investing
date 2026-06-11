@@ -4,12 +4,13 @@ load_dotenv()
 
 class Config:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "QQQM,SPYM,GLDM,IBIT,SGOV,QLD,TQQQ,SSO,UPRO").split(",")
+    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "QQQM,SPYM,GLDM,IBIT,SGOV,SPMO,SOXQ,QLD,TQQQ,SSO,UPRO").split(",")
     WATCH_CRYPTO = os.getenv("WATCH_CRYPTO", "bitcoin,ethereum,solana").split(",")
     # 적립·모니터링 대상 포트폴리오
     ACCUMULATION_PORTFOLIO = os.getenv(
         "ACCUMULATION_PORTFOLIO",
         "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM 미보유 → 목표)
+        "SPMO,SOXQ,"                       # 위성 (각 상한 10%, 저수지 구간 매수)
         "QLD,TQQQ,SSO,UPRO,"              # 레버리지 (조정 시 전술)
         "QQQI,SPYI",                       # 레거시 (정리 중)
     ).replace(" ", "").split(",")
@@ -29,12 +30,13 @@ class Config:
         "SOXQ":  1,
         "SPYM":  1.1511,
         "IBIT":  1,
+        "USD":   4,      # ProShares Ultra Semiconductors (2x) — 레거시
     }
 
 
     # ── 현금 관리 ─────────────────────────────────────────────────
-    # 헌법 5조: SGOV 목표 29%
-    TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.29"))
+    # 헌법 5조: SGOV 목표 20% (2026.6 개정 — 기존 29%)
+    TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.20"))
     CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
     IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "50.65"))  # 미사용 USD 잔고
 
@@ -46,23 +48,55 @@ class Config:
     # 코드는 이 상수를 단일 진실 소스로 사용한다.
     # ════════════════════════════════════════════════════════════
 
-    # 헌법 5조 — 코어 5종목 목표 배분
+    # 헌법 5조 — 목표 배분 (2026.6 개정: 현금 29→20%, 반도체 슬라이스 신설)
+    # 비중은 대략적 파이 가이드 — 다소 어긋나도 OK (±10%p 드리프트만 경고).
+    # 반도체 10%는 위성 SOXQ 슬라이스 (SOXL/USD 레버 합산) — 합계 90% + 반도체 10%.
     CORE_ALLOCATION: dict[str, float] = {
         "QQQM": 0.30,   # Nasdaq 100 성장
         "SPYM": 0.30,   # S&P 500 닻
         "GLDM": 0.07,   # 금 (인플레 헤지)
         "IBIT": 0.03,   # 비트코인 (통화 절하 헤지)
-        "SGOV": 0.29,   # 현금 + 매수 탄약
+        "SGOV": 0.20,   # 현금 + 매수 탄약
     }
 
-    # 레버리지 → 코어 버킷 매핑 (조정 시 임시 포지션, 노출 합산용)
+    # 레버리지 → 버킷 매핑 (조정 시 임시 포지션, 노출 합산용)
     LEVERAGE_BUCKET: dict[str, str] = {
         "QLD": "QQQM", "TQQQ": "QQQM",     # Nasdaq 노출
         "SSO": "SPYM", "UPRO": "SPYM",     # S&P 노출
+        "SOXL": "SOXQ", "USD": "SOXQ",     # 반도체 노출 (3x/2x)
     }
 
+    # ── 위성(satellite) 지수 ETF — 2026.6 헌법 개정 ──────────────
+    # 개별주 금지는 유지. 지수 ETF는 트랙레코드 5년+로 완화.
+    # 위성은 코어를 대체하지 않음: 해당 버킷 안에서 상한까지만,
+    # 매수는 저수지(웅덩이) 구간에서 신규자금·배당·레거시 정리 대금으로만.
+    SATELLITE_TICKERS: dict[str, float] = {"SPMO": 0.10, "SOXQ": 0.10}   # 총자산 대비 상한
+    SATELLITE_BUCKET: dict[str, str] = {"SPMO": "SPYM"}    # SPMO는 S&P 버킷 합산, SOXQ는 자체 반도체 슬라이스
+
+    # ── 저수지(웅덩이) 매수 구간 — 52주 고점 대비 종목별 낙폭 ────
+    # 역할 분담: 얼마 쏠지 = 헌법 6조 S&P ATH 트리거 / 어디에 쏠지 = 종목별 수위
+    # scale: 변동성 큰 자산은 같은 의미의 낙폭이 더 깊음 (IBIT ≈ 주식 3배)
+    RESERVOIR_ZONES: list[dict] = [
+        {"dd": -3,  "label": "🌦 얕은 웅덩이", "action": "이번 달 납입·배당 매수를 앞당겨 실행"},
+        {"dd": -7,  "label": "🟠 저수지",      "action": "분할 매수 1차 — 탄약 비율은 헌법 6조 트리거"},
+        {"dd": -15, "label": "🔴 깊은 저수지", "action": "분할 매수 2차 — 역사적 기대수익 구간"},
+        {"dd": -25, "label": "🟣 댐 바닥",     "action": "최대 매수 구간 — 비상금 외 적극 매수"},
+    ]
+    RESERVOIR_SCALE: dict[str, float] = {"IBIT": 3.0, "SOXQ": 1.5}   # 반도체는 낙폭 1.5배 보정
+    RESERVOIR_WATCH: list[str] = ["QQQM", "SPYM", "SPMO", "SOXQ", "GLDM", "IBIT"]
+
+    # ── 개별주 워치리스트 — 정보용 (이 계좌는 매수 안 함, 헌법 4조 그대로) ──
+    INDIVIDUAL_WATCHLIST: list[str] = ["NVDA", "TSLA", "AEHR"]
+
+    # ── 코어 과열 부분 익절 (헌법 7조 예외, 2026.6 신설) ─────────
+    # "많이 오르고 현금이 필요하면 판다" — RSI 과열 + 현금 부족 + S&P ATH 근처일 때만
+    CORE_TRIM_RSI = 70           # 이 RSI 이상이면 과열
+    CORE_TRIM_CASH_GAP = 0.03    # 현금 비중이 목표보다 이만큼(%p) 부족하면 트리거
+    CORE_TRIM_PCT = 0.05         # 과열 종목의 5%만 부분 익절
+
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
-    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXQ", "SOXL", "SOXX",
+    # SOXQ는 2026.6 위성 승격, SOXL/USD는 반도체 레버 노출로 분류 → 레거시 제외
+    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXX",
                                  "SCHD", "DIVO", "DGRW", "QDVO", "ETN",
                                  "MU", "VRT", "AEHR", "GEV", "NVDA", "AVGO",
                                  "CCJ", "CEG", "XOM", "COPX", "BITX", "ETHU",
@@ -105,6 +139,10 @@ class Config:
     # 헌법 9조 — 한국 phase 양도세 (2026.5~2027.11)
     KR_CGT_DEDUCTION_KRW = 2_500_000      # 연 250만원 공제
     KR_PHASE_END = "2027-11"
+
+    # 헌법 1·9조 — 거주국 phase 전환 일정 (NZ Transitional 시작 = KR_PHASE_END)
+    NZ_FIF_START = "2031-11"   # NZ Transitional → FIF (FDR 5% deemed income, 1년)
+    AU_MOVE = "2032-11"        # NZ → 호주 (영구 정착)
     # 거래기록(.transactions.json) 미동기화 시 실현차익 하한 — 사용자가 직접 갱신.
     # 올해 250만원 공제를 이미 소진했다면 250만원으로 설정해 매도 플랜이 막히게 함.
     KR_CGT_REALIZED_KRW_OVERRIDE = float(os.getenv("KR_CGT_REALIZED_KRW_OVERRIDE", "2500000"))

@@ -161,11 +161,11 @@ def calc_macro_risk_score(indicators: dict) -> tuple[int, list[str]]:
 
 
 def calc_cash_target(risk_score: int) -> float:
-    """현금(SGOV) 목표 비중 — 헌법 5조 기준 29% 고정.
+    """현금(SGOV) 목표 비중 — 헌법 5조 기준 20% 고정.
     위험 점수가 매우 높으면 소폭 상향(방어), 그 외엔 헌법값 유지."""
-    base = Config.CORE_ALLOCATION["SGOV"]  # 0.29
+    base = Config.CORE_ALLOCATION["SGOV"]  # 0.20
     if risk_score >= 7:
-        return max(base, 0.32)
+        return max(base, 0.25)
     return base
 
 
@@ -351,10 +351,14 @@ def _calc_deployable_cash(holdings: dict[str, float], idle_cash: float) -> tuple
 
 
 def _lev_exposure(positions: dict, bucket: str | None = None) -> float:
-    """레버리지 ETF 현재 평가액 합산. bucket 지정 시 해당 코어 노출만."""
+    """레버리지 ETF 현재 평가액 합산. bucket 지정 시 해당 버킷 노출만.
+    미지정 시 헌법 6조 조정 트리거 캡 기준(QQQM/SPYM)만 — SOXQ 위성 레버 제외."""
     total = 0.0
-    for tk, core in _config.LEVERAGE_BUCKET.items():
-        if bucket and core != bucket:
+    for tk, b in _config.LEVERAGE_BUCKET.items():
+        if bucket:
+            if b != bucket:
+                continue
+        elif b not in ("QQQM", "SPYM"):
             continue
         pos = (positions or {}).get(tk)
         if pos:
@@ -1109,7 +1113,7 @@ def build_milestone_section(total_portfolio: float) -> str:
 
 # ── 한국 양도세 공제 추적 (헌법 9조, 한국 phase 한정) ─────────────
 
-def build_kr_tax_section(usd_krw: float) -> str:
+def build_kr_tax_section(usd_krw: float, ibkr: dict | None = None) -> str:
     """
     한국 phase(2026.5~2027.11) 양도세 250만원 연 공제 활용 추적.
     유일하게 허용되는 매도(전략적 부분 매도+즉시 재매수로 평단 스텝업).
@@ -1122,12 +1126,8 @@ def build_kr_tax_section(usd_krw: float) -> str:
     if not usd_krw or usd_krw <= 0:
         return ""
 
-    try:
-        from transactions import realized_ytd
-        realized_usd = realized_ytd()
-    except Exception as e:
-        print(f"[kr_tax] realized_ytd 실패: {e}")
-        realized_usd = 0.0
+    from tax_korea import realized_ytd_usd
+    realized_usd = realized_ytd_usd(ibkr)
 
     realized_krw = max(realized_usd * usd_krw, _config.KR_CGT_REALIZED_KRW_OVERRIDE)
     deduction = _config.KR_CGT_DEDUCTION_KRW
@@ -1160,7 +1160,7 @@ def build_leverage_harvest_plan(
 
     트리거 3가지 모두 충족 시만 표시:
       1. S&P500 ATH 대비 낙폭 -3% 이내 (레버리지 고점 타이밍)
-      2. SGOV/현금 비중이 목표(29%) 미달 — 탄약 부족
+      2. SGOV/현금 비중이 목표(20%) 미달 — 탄약 부족
       3. 보유 레버리지 ETF 중 미실현 수익 ≥ 15% 인 것 존재
     코어(QQQM/SPYM/GLDM/IBIT)는 대상 제외 — 절대 매도 안 함.
     """
@@ -1176,7 +1176,7 @@ def build_leverage_harvest_plan(
         return ""  # 조정 중 — 레버리지 익절 타이밍 아님
 
     # Trigger 2: 현금 비중 부족
-    target_ratio = _config.CORE_ALLOCATION["SGOV"]  # 0.29
+    target_ratio = _config.CORE_ALLOCATION["SGOV"]  # 0.20
     cash_value = idle_cash
     for t, q in holdings.items():
         if not q or q <= 0:
@@ -1202,7 +1202,7 @@ def build_leverage_harvest_plan(
     except Exception:
         tx_summary = {}
 
-    lev_tickers = list(_config.LEVERAGE_BUCKET.keys())  # QLD, TQQQ, SSO, UPRO
+    lev_tickers = list(_config.LEVERAGE_BUCKET.keys())  # QLD, TQQQ, SSO, UPRO, SOXL, USD
     candidates: list[dict] = []
 
     for t in lev_tickers:
@@ -1485,10 +1485,12 @@ def build_report() -> str:
     lines.append("")
 
     buy_count = 0
+    judged: dict[str, dict] = {}
 
     for ticker in CORE_TICKERS:
         target_pct = _config.CORE_ALLOCATION.get(ticker, 0) * 100
         result = judge_ticker(ticker, mkt_score)
+        judged[ticker] = result
         price = result["price"]
         drawdown = result["drawdown"]
         rsi = result.get("rsi")
@@ -1545,6 +1547,31 @@ def build_report() -> str:
             lines.append(f"  • <b>{t}</b>  {q:g}주  ${p:.2f}")
         lines.append("  <i>신규 매수 금지. 세금 룰(한국 양도세 공제·NZ 면세기)에 맞춰 정리.</i>")
 
+    # ── [2-c] 개별주 워치 (정보용 — 이 계좌는 매수 안 함, 헌법 4조) ──
+    watchlist = getattr(_config, "INDIVIDUAL_WATCHLIST", [])
+    if watchlist:
+        try:
+            import reservoir
+            lines.append("\n" + "━" * 28)
+            lines.append("<b>👀 개별주 워치</b>  <i>(정보용 — 이 계좌는 매수 안 함, 헌법 4조)</i>")
+            for t in watchlist:
+                r = judge_ticker(t, mkt_score)
+                price = r.get("price")
+                if not price:
+                    lines.append(f"  ⚪ <b>{t}</b>  데이터 없음")
+                    continue
+                drawdown = r.get("drawdown")
+                rsi = r.get("rsi")
+                rsi_tag = ""
+                if rsi is not None:
+                    mark = "🔴" if rsi >= 70 else ("🟢" if rsi <= 30 else "")
+                    rsi_tag = f"  RSI {rsi}{mark}"
+                idx, zone = reservoir.classify(drawdown if drawdown is not None else 0)
+                zone_tag = f"  → {reservoir.zone_label(idx)}" if zone else ""
+                lines.append(f"  <b>{t}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{zone_tag}")
+        except Exception as e:
+            print(f"[watchlist] {e}")
+
     # ── [3] 현금 비중 + 위험점수 섹션 ────────────────────────────
     cash_section, available_cash, _total_portfolio = build_cash_section(
         holdings, idle_cash,
@@ -1567,6 +1594,22 @@ def build_report() -> str:
     except Exception as e:
         print(f"[harvest] {e}")
 
+    # ── [3-c] 코어 과열 부분 익절 (헌법 7조 예외, 2026.6 신설) ────
+    try:
+        import core_trim
+        sp_dd = _sp500_drawdown_from_ath()
+        sp_drawdown = sp_dd["drawdown"] if sp_dd else None
+        cash_ratio = (available_cash / _total_portfolio) if _total_portfolio else 0
+        target_cash_ratio = _config.CORE_ALLOCATION["SGOV"]
+        trim_section = core_trim.build_core_trim_section(
+            sp_drawdown, cash_ratio, target_cash_ratio, judged, holdings,
+        )
+        if trim_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(trim_section)
+    except Exception as e:
+        print(f"[core_trim] {e}")
+
     # ── [4] 조정 대응 가이드 (헌법 6조: S&P500 ATH 트리거) ────────
     correction_section = build_correction_section(
         holdings, idle_cash, _total_portfolio,
@@ -1576,6 +1619,17 @@ def build_report() -> str:
     if correction_section:
         lines.append("\n" + "━" * 28)
         lines.append(correction_section)
+
+    # ── [4-b] 저수지 수위 (종목별 52주 고점 낙폭 — 어디에 쏠지) ────
+    try:
+        import reservoir
+        res_state = calc_portfolio_state(holdings, idle_cash) if _ibkr_ok else None
+        res_section = reservoir.build_reservoir_section(res_state)
+        if res_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(res_section)
+    except Exception as e:
+        print(f"[reservoir] {e}")
 
     # ── [6] 다가오는 이벤트 캘린더 ────────────────────────────────
     cal_section = build_calendar_section(holdings, days_ahead=14)
@@ -1636,6 +1690,20 @@ def build_report() -> str:
     except Exception as e:
         print(f"[reinvest_plan] {e}")
 
+    # ── [8-c] 배당 입금 감지 (IBKR 실제 입금 → 즉시 재투자 지시) ───
+    if _ibkr_ok and _ibkr.get("dividends"):
+        try:
+            import dividend_tracker
+            new_divs = dividend_tracker.find_new_dividends(_ibkr["dividends"])
+            if new_divs:
+                div_state = calc_portfolio_state(holdings, idle_cash)
+                div_alert = dividend_tracker.build_dividend_alert_section(div_state, new_divs)
+                if div_alert:
+                    lines.append("\n" + "━" * 28)
+                    lines.append(div_alert)
+        except Exception as e:
+            print(f"[dividend_tracker] {e}")
+
     # ── [9] 배당 일정 (배당락일 + 입금예정일) ─────────────────────
     div_sched = build_dividend_schedule_section(holdings, days_ahead=90)
     if div_sched:
@@ -1660,12 +1728,23 @@ def build_report() -> str:
     # ── [11] 한국 양도세 공제 추적 (한국 phase 한정) ──────────────
     try:
         krw_rate = (indicators.get("usd_krw", {}) or {}).get("usd_to_krw", 0)
-        tax_section = build_kr_tax_section(krw_rate)
+        tax_section = build_kr_tax_section(krw_rate, _ibkr)
         if tax_section:
             lines.append("\n" + "━" * 28)
             lines.append(tax_section)
     except Exception as e:
         print(f"[kr_tax] {e}")
+
+    # ── [11-b] 자산 추이 (1주/1개월/1년 전 대비, ATH 워터마크) ────
+    try:
+        import asset_history
+        history = asset_history.record_snapshot(_total_portfolio)
+        hist_section = asset_history.build_asset_history_section(_total_portfolio, history)
+        if hist_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(hist_section)
+    except Exception as e:
+        print(f"[asset_history] {e}")
 
     # ── [12] 마일스톤 진행률 (동기 부여 — 클로저) ─────────────────
     try:
@@ -1675,6 +1754,17 @@ def build_report() -> str:
             lines.append(ms_section)
     except Exception as e:
         print(f"[milestone] {e}")
+
+    # ── [13] 거주국 로드맵 (헌법 1·9조 — phase 전환 D-day + 레거시 정리) ──
+    try:
+        import residency_roadmap
+        roadmap_state = calc_portfolio_state(holdings, idle_cash) if _total_portfolio > 0 else None
+        roadmap_section = residency_roadmap.build_roadmap_section(roadmap_state)
+        if roadmap_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(roadmap_section)
+    except Exception as e:
+        print(f"[residency_roadmap] {e}")
 
     lines.append("\n" + "━" * 28)
     lines.append("🤖 <i>Stock Agent — 평일 미국 장 오픈 후 30분 자동 발송 (DST 자동 반영)</i>")

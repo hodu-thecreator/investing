@@ -19,21 +19,27 @@ from config import Config
 
 _config = Config()
 
-# ── 헌법 5조: 코어 5종목 목표 비중 ────────────────────────────────
-# 레버리지(SSO/UPRO/QLD/TQQQ)는 조정 시 임시 포지션 — 각 코어 노출에 합산.
-# SPYI/QQQI/SOXQ 등 레거시는 미분류로 빠지며 정리 대상.
+# ── 헌법 5조: 목표 비중 (대략적 파이 가이드 — 다소 어긋나도 OK) ──
+# 레버리지(SSO/UPRO/QLD/TQQQ/SOXL/USD)는 조정 시 임시 포지션 — 각 버킷 노출에 합산.
+# SPYI/QQQI 등 레거시는 미분류로 빠지며 정리 대상. SOXQ는 2026.6 자체 슬라이스 신설.
 TARGET_ALLOCATION: dict[str, dict] = {
     "S&P500": {
         "target": 0.30,
-        "tickers": ["SPYM", "SSO", "UPRO"],   # SSO/UPRO = S&P 레버 노출
+        "tickers": ["SPYM", "SPMO", "SSO", "UPRO"],   # SPMO = 위성(상한 10%), SSO/UPRO = 레버 노출
         "preferred": ["SPYM"],
-        "note": "조정 시 SSO/UPRO 임시 매수 — 평시엔 SPYM",
+        "note": "조정 시 SSO/UPRO 임시 매수 — 평시엔 SPYM, 위성 SPMO는 저수지 구간만",
     },
     "Nasdaq100": {
         "target": 0.30,
         "tickers": ["QQQM", "QLD", "TQQQ"],   # QLD/TQQQ = Nasdaq 레버 노출
         "preferred": ["QQQM"],
         "note": "조정 시 QLD/TQQQ 임시 매수 — 평시엔 QQQM",
+    },
+    "반도체": {
+        "target": 0.10,
+        "tickers": ["SOXQ", "SOXL", "USD"],   # SOXL(3x)/USD(2x) = 반도체 레버 노출
+        "preferred": ["SOXQ"],
+        "note": "위성 슬라이스 — 매수는 저수지 구간만, 레버는 익절 대상",
     },
     "금": {
         "target": 0.07,
@@ -46,7 +52,7 @@ TARGET_ALLOCATION: dict[str, dict] = {
         "preferred": ["IBIT"],
     },
     "현금": {
-        "target": 0.29,
+        "target": 0.20,
         "tickers": ["SGOV", "BIL", "SHV", "SHY"],
         "preferred": ["SGOV"],
     },
