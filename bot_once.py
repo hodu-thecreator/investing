@@ -421,7 +421,7 @@ def handle_goal(chat_id: int, arg: str):
         holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config)
         total = calc_portfolio_state(holdings, idle_cash).get("total", 0)
         monthly_krw = _parse_krw_arg(arg)
-        send_message(action_plan.build_goal_message(total, monthly_krw), chat_id=str(chat_id))
+        send_message(action_plan.build_goal_message(total, monthly_krw, holdings), chat_id=str(chat_id))
     except Exception as e:
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
@@ -555,26 +555,26 @@ def main():
     offset = state.get("offset", 0)
     print(f"[{datetime.now():%H:%M:%S}] 미처리 명령 확인 (offset={offset})")
 
+    # getUpdates 실패(예: 웹훅 충돌, 네트워크 오류)가 아래 일방향 알림까지
+    # 막지 않도록 별도 처리 — 명령 응답이 죽어도 장중 알림은 계속 발송.
     try:
         data = _api("getUpdates", offset=offset + 1, timeout=5, allowed_updates=["message"])
+        updates = data.get("result", [])
+        print(f"  {len(updates)}개 업데이트")
+
+        for update in updates:
+            msg = update.get("message")
+            if msg:
+                try:
+                    dispatch(msg, state)
+                except Exception as e:
+                    print(f"dispatch 오류: {e}")
+            offset = update["update_id"]
+
+        if updates:
+            state["offset"] = offset
     except Exception as e:
         print(f"getUpdates 실패: {e}")
-        return
-
-    updates = data.get("result", [])
-    print(f"  {len(updates)}개 업데이트")
-
-    for update in updates:
-        msg = update.get("message")
-        if msg:
-            try:
-                dispatch(msg, state)
-            except Exception as e:
-                print(f"dispatch 오류: {e}")
-        offset = update["update_id"]
-
-    if updates:
-        state["offset"] = offset
 
     # ── 장중 급락 알림 (미국장 시간 + 10분 throttle 내부에서 처리) ──
     try:

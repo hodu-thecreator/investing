@@ -105,13 +105,17 @@ class Config:
     # 헌법 9조 — 한국 phase 양도세 (2026.5~2027.11)
     KR_CGT_DEDUCTION_KRW = 2_500_000      # 연 250만원 공제
     KR_PHASE_END = "2027-11"
+    # 거래기록(.transactions.json) 미동기화 시 실현차익 하한 — 사용자가 직접 갱신.
+    # 올해 250만원 공제를 이미 소진했다면 250만원으로 설정해 매도 플랜이 막히게 함.
+    KR_CGT_REALIZED_KRW_OVERRIDE = float(os.getenv("KR_CGT_REALIZED_KRW_OVERRIDE", "2500000"))
 
     # 비상금 (-30% 총동원에서도 제외)
     EMERGENCY_FUND_USD = float(os.getenv("EMERGENCY_FUND_USD", "10000"))
 
     # ── 결정 엔진 (/now, /goal, /tax) ────────────────────────────
-    # 헌법 1조: 월 납입 가능 ₩150~200만 → 기본값 중간치
-    MONTHLY_DEPOSIT_KRW = float(os.getenv("MONTHLY_DEPOSIT_KRW", "1750000"))
+    # 헌법 1조: 월 납입 가능 ₩150~200만. 신규 납입 계획 없을 땐 0 —
+    # 이 경우 /now·/goal은 배당 재투자 기준으로 전환.
+    MONTHLY_DEPOSIT_KRW = float(os.getenv("MONTHLY_DEPOSIT_KRW", "0"))
     # 마일스톤 ETA 계산용 장기 기대수익률 (보수적 가정)
     EXPECTED_ANNUAL_RETURN = float(os.getenv("EXPECTED_ANNUAL_RETURN", "0.07"))
     # USD/KRW 환율 조회 실패 시 폴백

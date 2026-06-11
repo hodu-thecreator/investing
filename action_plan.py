@@ -83,6 +83,25 @@ def split_deposit(state: dict, deposit_usd: float) -> list[tuple[str, float, str
     return out
 
 
+# ── 배당 재투자 (신규 납입 없을 때 기본 재원) ─────────────────────
+
+def estimate_monthly_dividend_usd(holdings: dict) -> float:
+    """보유 종목 기준 예상 월 배당금 합계(USD). 조회 실패 종목은 0 처리."""
+    import yfinance as yf
+    total_annual = 0.0
+    for ticker, qty in (holdings or {}).items():
+        if not qty or qty < 0.01:
+            continue
+        try:
+            info = yf.Ticker(ticker).info or {}
+            rate = info.get("trailingAnnualDividendRate") or 0
+            if rate:
+                total_annual += qty * rate
+        except Exception as e:
+            print(f"[action_plan] {ticker} 배당 조회 실패: {e}")
+    return total_annual / 12
+
+
 # ── 마일스톤 ETA ─────────────────────────────────────────────────
 
 def months_to_target(
@@ -120,17 +139,22 @@ def _eta_str(months: float | None) -> str:
 
 # ── /goal — 자유로 가는 길 ───────────────────────────────────────
 
-def build_goal_message(total: float, monthly_krw: float | None = None) -> str:
+def build_goal_message(
+    total: float, monthly_krw: float | None = None, holdings: dict | None = None,
+) -> str:
     fx = usd_krw_rate()
-    monthly_krw = monthly_krw or _config.MONTHLY_DEPOSIT_KRW
-    monthly_usd = monthly_krw / fx if fx else 0
+    if monthly_krw is None:
+        monthly_krw = _config.MONTHLY_DEPOSIT_KRW
     r = _config.EXPECTED_ANNUAL_RETURN
 
     lines = ["<b>🧭 자유로 가는 길</b>"]
-    lines.append(
-        f"  현재 <b>${total:,.0f}</b> · 월 ₩{monthly_krw/10_000:,.0f}만 납입"
-        f" · 연 {r*100:.0f}% 가정"
-    )
+    if monthly_krw > 0:
+        monthly_usd = monthly_krw / fx if fx else 0
+        basis = f"월 ₩{monthly_krw/10_000:,.0f}만 납입"
+    else:
+        monthly_usd = estimate_monthly_dividend_usd(holdings or {})
+        basis = f"신규 납입 없음 · 배당 재투자 월 ${monthly_usd:,.0f}"
+    lines.append(f"  현재 <b>${total:,.0f}</b> · {basis} · 연 {r*100:.0f}% 가정")
     lines.append("")
 
     nxt_found = False
@@ -176,36 +200,46 @@ def build_now_message(
     lines.append(f"\n👉 <b>{headline}</b>")
     lines.append(f"<i>{detail}</i>")
 
-    # 2) 이번 달 납입 배분 — 언더웨이트 버킷부터 무매도 수렴
+    # 2) 이번 달 재원 배분 — 언더웨이트 버킷부터 무매도 수렴
+    #    신규 납입 계획이 없으면(MONTHLY_DEPOSIT_KRW=0) 배당 재투자가 재원
     fx = usd_krw_rate()
-    monthly_krw = monthly_krw or _config.MONTHLY_DEPOSIT_KRW
-    deposit_usd = monthly_krw / fx if fx else 0
-
+    if monthly_krw is None:
+        monthly_krw = _config.MONTHLY_DEPOSIT_KRW
     state = calc_portfolio_state(holdings, idle_cash)
-    plan = split_deposit(state, deposit_usd)
-    if plan:
-        lines.append("")
-        lines.append(
+
+    if monthly_krw > 0:
+        deposit_usd = monthly_krw / fx if fx else 0
+        section_title = (
             f"<b>💰 이번 달 납입 배분</b>"
             f"  ₩{monthly_krw:,.0f} ≈ ${deposit_usd:,.0f}  <i>(₩{fx:,.0f}/$)</i>"
         )
+        no_sale_note = "  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴 (매도 없음)</i>"
+    else:
+        deposit_usd = estimate_monthly_dividend_usd(holdings)
+        section_title = f"<b>💰 배당 재투자 배분</b>  월 ${deposit_usd:,.0f}  <i>(신규 납입 없음)</i>"
+        no_sale_note = "  <i>→ 배당금만 언더웨이트 버킷에 재투자 (매도·추가납입 없음)</i>"
+
+    plan = split_deposit(state, deposit_usd)
+    if plan:
+        lines.append("")
+        lines.append(section_title)
         for ticker, amt, cat in plan:
             cur = state["categories"][cat]["current_pct"] * 100
             tgt = state["categories"][cat]["target_pct"] * 100
             gap_note = f"{cur:.0f}%→{tgt:.0f}%" if cur < tgt - 0.5 else "비중 유지"
             lines.append(f"  <b>{ticker}</b>  ${amt:,.0f}  <i>{gap_note}</i>")
-        lines.append("  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴 (매도 없음)</i>")
+        lines.append(no_sale_note)
 
     # 3) 마일스톤 한 줄
     total = state.get("total", 0)
     nxt = next((m for m in _config.MILESTONES if total < m[0]), None)
     if total > 0 and nxt:
-        monthly_usd = deposit_usd
-        m = months_to_target(total, nxt[0], monthly_usd, _config.EXPECTED_ANNUAL_RETURN)
+        m = months_to_target(total, nxt[0], deposit_usd, _config.EXPECTED_ANNUAL_RETURN)
+        pace = "납입 유지 시" if monthly_krw > 0 else "배당 재투자만으로"
         lines.append("")
         lines.append(
             f"🧭 {_fmt_target(nxt[0])}까지 <b>${nxt[0]-total:,.0f}</b>"
-            f"  ·  납입 유지 시 {_eta_str(m)}"
+            f"  ·  {pace} {_eta_str(m)}"
         )
 
     lines.append("\n<i>룰이 결정하고, 호두는 실행만 합니다.</i>")

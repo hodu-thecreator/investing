@@ -113,7 +113,7 @@ def build_tax_message() -> str:
     except Exception as e:
         print(f"[tax] realized_ytd 실패: {e}")
 
-    realized_krw = realized_usd * fx
+    realized_krw = max(realized_usd * fx, _config.KR_CGT_REALIZED_KRW_OVERRIDE)
     headroom_krw = _config.KR_CGT_DEDUCTION_KRW - realized_krw
     headroom_usd = headroom_krw / fx if fx else 0
 
