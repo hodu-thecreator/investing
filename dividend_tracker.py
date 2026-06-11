@@ -97,5 +97,5 @@ def build_dividend_alert_section(state: dict, new_dividends: list[dict]) -> str:
     else:
         lines.append("  → ☀️ 만수위 — 추격 매수 금지. USD로 모아두기 (웅덩이 열리면 알림)")
 
-    lines.append("  <i>헌법 7조: 배당은 재투자, 매도 없음</i>")
+    lines.append("  <i>배당은 재투자, 매도 없음</i>")
     return "\n".join(lines)

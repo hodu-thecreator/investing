@@ -81,13 +81,13 @@ def evaluate(ticker: str) -> str:
         )
     if ticker in set(_config.LEGACY_TICKERS):
         return (
-            f"🗑 <b>{ticker}</b>는 청산 예정 레거시입니다 (헌법 5조).\n"
+            f"🗑 <b>{ticker}</b>는 청산 예정 레거시입니다.\n"
             f"신규 매수 금지 — /tax 로 세금 0 정리 플랜을 확인하세요."
         )
     if ticker in _config.SATELLITE_TICKERS:
         cap = _config.SATELLITE_TICKERS[ticker] * 100
         return (
-            f"🛰 <b>{ticker}</b>는 승인된 위성입니다 (헌법 5조, 상한 {cap:.0f}%).\n"
+            f"🛰 <b>{ticker}</b>는 승인된 위성입니다 (상한 {cap:.0f}%).\n"
             f"매수는 저수지 구간에서만 — /dip 으로 수위를 확인하세요."
         )
 
@@ -98,7 +98,7 @@ def evaluate(ticker: str) -> str:
     if info["quote_type"] == "EQUITY":
         name = f" ({info['name']})" if info["name"] else ""
         return (
-            f"⛔ <b>{ticker}</b>{name} — <b>개별주는 예외 없이 금지</b> (헌법 4조).\n"
+            f"⛔ <b>{ticker}</b>{name} — <b>개별주는 예외 없이 금지</b>.\n"
             f"8문 통과제 이전에 거부됩니다. 지수 ETF만 검토 대상입니다."
         )
 
@@ -143,7 +143,7 @@ def evaluate(ticker: str) -> str:
     max_possible = 8 - failed  # 미확인 항목이 전부 통과한다 가정해도
 
     name = f" <i>({info['name']})</i>" if info["name"] else ""
-    lines = [f"<b>🔍 {ticker}{name} — 헌법 8조 8문 통과제</b>", ""]
+    lines = [f"<b>🔍 {ticker}{name} — 8문 통과제</b>", ""]
     for i, (q, ok, why) in enumerate(checks, 1):
         mark = "✅" if ok is True else "❌" if ok is False else "❔"
         lines.append(f"  {i}. {mark} {q}  <i>{why}</i>")
@@ -168,7 +168,7 @@ def evaluate(ticker: str) -> str:
         lines.append("")
         lines.append(
             f"<b>📌 정보성 기록</b>: 트랙레코드·보수·규모 통과 — 위성(SPMO/SOXQ) "
-            f"교체 검토 시 후보로 기록해둠 (8조 재심사 필요, 자동 추가 아님)"
+            f"교체 검토 시 후보로 기록해둠 (교체는 8문 통과제 재심사 후, 자동 추가 아님)"
         )
 
     return "\n".join(lines)

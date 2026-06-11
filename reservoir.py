@@ -120,7 +120,7 @@ def build_reservoir_section(state: dict | None = None) -> str:
         lines.append(f"  👉 <b>{deepest['ticker']}</b> 우선 — {zone_action(deepest['zone_idx'])}")
         if idle >= _config.IDLE_CASH_ALERT_USD:
             lines.append(f"  💤 노는 돈 <b>${idle:,.0f}</b> — 여기에 먼저 투입")
-        lines.append("  <i>얼마 쏠지는 헌법 6조 S&P 트리거 기준 (/now 확인)</i>")
+        lines.append("  <i>얼마 쏠지는 S&P ATH 트리거 기준 (/now 확인)</i>")
     else:
         lines.append("  <i>전 종목 만수위 — 정기 매수만, 추격 금지</i>")
         if idle >= _config.IDLE_CASH_ALERT_USD:
