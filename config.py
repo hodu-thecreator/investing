@@ -9,7 +9,7 @@ class Config:
     # 적립·모니터링 대상 포트폴리오
     ACCUMULATION_PORTFOLIO = os.getenv(
         "ACCUMULATION_PORTFOLIO",
-        "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM·IBIT 미보유 → 목표)
+        "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM 미보유 → 목표)
         "QLD,TQQQ,SSO,UPRO,"              # 레버리지 (조정 시 전술)
         "QQQI,SPYI",                       # 레거시 (정리 중)
     ).replace(" ", "").split(",")
@@ -19,16 +19,16 @@ class Config:
     HOLDINGS: dict[str, float] = {
         "QQQI":  600,
         "SPYI":  600,
-        "SGOV":  110.24,
-        "SOXL":  0.1001,
+        "SGOV":  115,
+        "SOXL":  1,
         "UPRO":  0.1001,
         "QLD":   0.1001,
         "TQQQ":  0.1001,
         "SSO":   0.1001,
-        "QQQM":  0.02,
-        "SOXQ":  0.01,
-        "SPYM":  0.01,
-        "SCHD":  0.02,
+        "QQQM":  0.2896,
+        "SOXQ":  1,
+        "SPYM":  1.1511,
+        "IBIT":  1,
     }
 
 
@@ -36,7 +36,7 @@ class Config:
     # 헌법 5조: SGOV 목표 29%
     TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.29"))
     CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
-    IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "612.19"))  # 미사용 USD 잔고
+    IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "50.65"))  # 미사용 USD 잔고
 
     # ── 정기 적립 스케줄 (자동 매수 비활성화) ───────────────────
     DCA_SCHEDULE: dict[str, dict] = {}
