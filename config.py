@@ -82,6 +82,15 @@ class Config:
     RESERVOIR_SCALE: dict[str, float] = {"IBIT": 3.0}
     RESERVOIR_WATCH: list[str] = ["QQQM", "SPYM", "SPMO", "GLDM", "IBIT"]
 
+    # ── 개별주 워치리스트 — 정보용 (이 계좌는 매수 안 함, 헌법 4조 그대로) ──
+    INDIVIDUAL_WATCHLIST: list[str] = ["NVDA", "TSLA", "AEHR"]
+
+    # ── 코어 과열 부분 익절 (헌법 7조 예외, 2026.6 신설) ─────────
+    # "많이 오르고 현금이 필요하면 판다" — RSI 과열 + 현금 부족 + S&P ATH 근처일 때만
+    CORE_TRIM_RSI = 70           # 이 RSI 이상이면 과열
+    CORE_TRIM_CASH_GAP = 0.03    # 현금 비중이 목표보다 이만큼(%p) 부족하면 트리거
+    CORE_TRIM_PCT = 0.05         # 과열 종목의 5%만 부분 익절
+
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
     LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXQ", "SOXL", "SOXX", "USD",
                                  "SCHD", "DIVO", "DGRW", "QDVO", "ETN",

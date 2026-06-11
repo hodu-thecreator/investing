@@ -1481,10 +1481,12 @@ def build_report() -> str:
     lines.append("")
 
     buy_count = 0
+    judged: dict[str, dict] = {}
 
     for ticker in CORE_TICKERS:
         target_pct = _config.CORE_ALLOCATION.get(ticker, 0) * 100
         result = judge_ticker(ticker, mkt_score)
+        judged[ticker] = result
         price = result["price"]
         drawdown = result["drawdown"]
         rsi = result.get("rsi")
@@ -1541,6 +1543,31 @@ def build_report() -> str:
             lines.append(f"  • <b>{t}</b>  {q:g}주  ${p:.2f}")
         lines.append("  <i>신규 매수 금지. 세금 룰(한국 양도세 공제·NZ 면세기)에 맞춰 정리.</i>")
 
+    # ── [2-c] 개별주 워치 (정보용 — 이 계좌는 매수 안 함, 헌법 4조) ──
+    watchlist = getattr(_config, "INDIVIDUAL_WATCHLIST", [])
+    if watchlist:
+        try:
+            import reservoir
+            lines.append("\n" + "━" * 28)
+            lines.append("<b>👀 개별주 워치</b>  <i>(정보용 — 이 계좌는 매수 안 함, 헌법 4조)</i>")
+            for t in watchlist:
+                r = judge_ticker(t, mkt_score)
+                price = r.get("price")
+                if not price:
+                    lines.append(f"  ⚪ <b>{t}</b>  데이터 없음")
+                    continue
+                drawdown = r.get("drawdown")
+                rsi = r.get("rsi")
+                rsi_tag = ""
+                if rsi is not None:
+                    mark = "🔴" if rsi >= 70 else ("🟢" if rsi <= 30 else "")
+                    rsi_tag = f"  RSI {rsi}{mark}"
+                idx, zone = reservoir.classify(drawdown if drawdown is not None else 0)
+                zone_tag = f"  → {reservoir.zone_label(idx)}" if zone else ""
+                lines.append(f"  <b>{t}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{zone_tag}")
+        except Exception as e:
+            print(f"[watchlist] {e}")
+
     # ── [3] 현금 비중 + 위험점수 섹션 ────────────────────────────
     cash_section, available_cash, _total_portfolio = build_cash_section(
         holdings, idle_cash,
@@ -1562,6 +1589,22 @@ def build_report() -> str:
             lines.append(harvest_section)
     except Exception as e:
         print(f"[harvest] {e}")
+
+    # ── [3-c] 코어 과열 부분 익절 (헌법 7조 예외, 2026.6 신설) ────
+    try:
+        import core_trim
+        sp_dd = _sp500_drawdown_from_ath()
+        sp_drawdown = sp_dd["drawdown"] if sp_dd else None
+        cash_ratio = (available_cash / _total_portfolio) if _total_portfolio else 0
+        target_cash_ratio = _config.CORE_ALLOCATION["SGOV"]
+        trim_section = core_trim.build_core_trim_section(
+            sp_drawdown, cash_ratio, target_cash_ratio, judged, holdings,
+        )
+        if trim_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(trim_section)
+    except Exception as e:
+        print(f"[core_trim] {e}")
 
     # ── [4] 조정 대응 가이드 (헌법 6조: S&P500 ATH 트리거) ────────
     correction_section = build_correction_section(

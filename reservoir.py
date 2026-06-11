@@ -175,6 +175,17 @@ def check_zone_alerts(state: dict, holdings: dict | None = None) -> bool:
         if note:
             lines.append(f" {note.strip()}")
 
+    # 왜 떨어지나 — VIX + SPY 당일 등락 한 줄 (정보 과잉 방지: 딱 한 줄만)
+    try:
+        from market_indicators import get_vix
+        from intraday_alert import _intraday_change
+        vix = get_vix()
+        _, spy_chg = _intraday_change("SPY")
+        if "current" in vix and spy_chg is not None:
+            lines.append(f"\n📰 SPY {spy_chg:+.1f}%  ·  VIX {vix['current']:.1f} ({vix['level']})")
+    except Exception as e:
+        print(f"[reservoir] 컨텍스트 조회 실패: {e}")
+
     # 얼마 쏠지 — 헌법 6조 S&P 트리거 한 줄
     try:
         from intraday_alert import _ath_trigger_status, _decide_action

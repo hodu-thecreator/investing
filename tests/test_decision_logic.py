@@ -163,5 +163,39 @@ class TestReservoirClassify(unittest.TestCase):
             prev = idx
 
 
+class TestCoreTrim(unittest.TestCase):
+    """코어 과열 부분 익절 — 헌법 7조 예외 (2026.6 신설)."""
+
+    def setUp(self):
+        from core_trim import build_core_trim_section
+        self.build = build_core_trim_section
+        self.holdings = {"QQQM": 100, "SPYM": 100, "GLDM": 50, "IBIT": 10}
+        self.judged_hot = {
+            "QQQM": {"rsi": 75},
+            "SPYM": {"rsi": 60},
+            "GLDM": {"rsi": 40},
+            "IBIT": {"rsi": 50},
+        }
+
+    def test_skips_when_far_from_ath(self):
+        out = self.build(-5.0, 0.20, 0.29, self.judged_hot, self.holdings)
+        self.assertEqual(out, "")
+
+    def test_skips_when_cash_sufficient(self):
+        out = self.build(-1.0, 0.27, 0.29, self.judged_hot, self.holdings)
+        self.assertEqual(out, "")
+
+    def test_skips_when_no_overheated(self):
+        cool = {t: {"rsi": 50} for t in self.judged_hot}
+        out = self.build(-1.0, 0.20, 0.29, cool, self.holdings)
+        self.assertEqual(out, "")
+
+    def test_trims_most_overheated(self):
+        out = self.build(-1.0, 0.20, 0.29, self.judged_hot, self.holdings)
+        self.assertIn("QQQM", out)
+        self.assertIn("RSI 75", out)
+        self.assertNotIn("SPYM", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
