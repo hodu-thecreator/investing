@@ -29,6 +29,7 @@ class Config:
         "SOXQ":  1,
         "SPYM":  1.1511,
         "IBIT":  1,
+        "USD":   4,      # ProShares Ultra Semiconductors (2x) — 레거시
     }
 
 
@@ -62,7 +63,7 @@ class Config:
     }
 
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
-    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXQ", "SOXL", "SOXX",
+    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXQ", "SOXL", "SOXX", "USD",
                                  "SCHD", "DIVO", "DGRW", "QDVO", "ETN",
                                  "MU", "VRT", "AEHR", "GEV", "NVDA", "AVGO",
                                  "CCJ", "CEG", "XOM", "COPX", "BITX", "ETHU",

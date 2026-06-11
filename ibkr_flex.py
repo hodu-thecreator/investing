@@ -67,13 +67,21 @@ def parse_positions(root: ET.Element) -> dict:
 
 
 def parse_cash(root: ET.Element) -> float:
+    """USD 현금 잔고. 계좌가 USD 단일통화면 currency="USD" 항목이 없고
+    "BASE_SUMMARY" 한 줄만 나오는 경우가 있어 그쪽도 폴백으로 확인."""
+    base_summary = None
     for cash in root.iter("CashReportCurrency"):
-        if cash.get("currency") == "USD":
-            try:
-                return float(cash.get("endingCash") or 0)
-            except (ValueError, TypeError):
-                pass
-    return 0.0
+        cur = cash.get("currency")
+        ending = cash.get("endingCash") or cash.get("endingSettledCash") or 0
+        try:
+            ending = float(ending)
+        except (ValueError, TypeError):
+            ending = 0.0
+        if cur == "USD":
+            return ending
+        if cur == "BASE_SUMMARY":
+            base_summary = ending
+    return base_summary or 0.0
 
 
 def parse_trades(root: ET.Element) -> list[dict]:

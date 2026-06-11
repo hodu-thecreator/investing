@@ -85,6 +85,15 @@ def diagnose() -> str:
             lines.append("        'Open Positions' 섹션을 추가하세요.")
         if n_cash == 0:
             lines.append("     ⚠️ 현금항목 0건 → 'Cash Report' 섹션을 추가하세요.")
+        else:
+            for cash_el in root.iter("CashReportCurrency"):
+                cur = cash_el.get("currency")
+                ending = cash_el.get("endingCash")
+                ending_settled = cash_el.get("endingSettledCash")
+                lines.append(
+                    f"     현금항목 raw: currency={cur} endingCash={ending}"
+                    f" endingSettledCash={ending_settled}"
+                )
         if n_pos > 0:
             positions = ibkr_flex.parse_positions(root)
             cash = ibkr_flex.parse_cash(root)
