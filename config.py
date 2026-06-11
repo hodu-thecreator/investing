@@ -9,7 +9,7 @@ class Config:
     # 적립·모니터링 대상 포트폴리오
     ACCUMULATION_PORTFOLIO = os.getenv(
         "ACCUMULATION_PORTFOLIO",
-        "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM·IBIT 미보유 → 목표)
+        "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM 미보유 → 목표)
         "QLD,TQQQ,SSO,UPRO,"              # 레버리지 (조정 시 전술)
         "QQQI,SPYI",                       # 레거시 (정리 중)
     ).replace(" ", "").split(",")
@@ -19,16 +19,16 @@ class Config:
     HOLDINGS: dict[str, float] = {
         "QQQI":  600,
         "SPYI":  600,
-        "SGOV":  110.24,
-        "SOXL":  0.1001,
+        "SGOV":  115,
+        "SOXL":  1,
         "UPRO":  0.1001,
         "QLD":   0.1001,
         "TQQQ":  0.1001,
         "SSO":   0.1001,
-        "QQQM":  0.02,
-        "SOXQ":  0.01,
-        "SPYM":  0.01,
-        "SCHD":  0.02,
+        "QQQM":  0.2896,
+        "SOXQ":  1,
+        "SPYM":  1.1511,
+        "IBIT":  1,
     }
 
 
@@ -36,7 +36,7 @@ class Config:
     # 헌법 5조: SGOV 목표 29%
     TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.29"))
     CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
-    IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "612.19"))  # 미사용 USD 잔고
+    IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "50.65"))  # 미사용 USD 잔고
 
     # ── 정기 적립 스케줄 (자동 매수 비활성화) ───────────────────
     DCA_SCHEDULE: dict[str, dict] = {}
@@ -105,7 +105,19 @@ class Config:
     # 헌법 9조 — 한국 phase 양도세 (2026.5~2027.11)
     KR_CGT_DEDUCTION_KRW = 2_500_000      # 연 250만원 공제
     KR_PHASE_END = "2027-11"
+    # 거래기록(.transactions.json) 미동기화 시 실현차익 하한 — 사용자가 직접 갱신.
+    # 올해 250만원 공제를 이미 소진했다면 250만원으로 설정해 매도 플랜이 막히게 함.
+    KR_CGT_REALIZED_KRW_OVERRIDE = float(os.getenv("KR_CGT_REALIZED_KRW_OVERRIDE", "2500000"))
 
     # 비상금 (-30% 총동원에서도 제외)
     EMERGENCY_FUND_USD = float(os.getenv("EMERGENCY_FUND_USD", "10000"))
+
+    # ── 결정 엔진 (/now, /goal, /tax) ────────────────────────────
+    # 헌법 1조: 월 납입 가능 ₩150~200만. 신규 납입 계획 없을 땐 0 —
+    # 이 경우 /now·/goal은 배당 재투자 기준으로 전환.
+    MONTHLY_DEPOSIT_KRW = float(os.getenv("MONTHLY_DEPOSIT_KRW", "0"))
+    # 마일스톤 ETA 계산용 장기 기대수익률 (보수적 가정)
+    EXPECTED_ANNUAL_RETURN = float(os.getenv("EXPECTED_ANNUAL_RETURN", "0.07"))
+    # USD/KRW 환율 조회 실패 시 폴백
+    FX_USDKRW_FALLBACK = float(os.getenv("FX_USDKRW_FALLBACK", "1400"))
 

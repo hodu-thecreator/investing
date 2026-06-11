@@ -1129,7 +1129,7 @@ def build_kr_tax_section(usd_krw: float) -> str:
         print(f"[kr_tax] realized_ytd 실패: {e}")
         realized_usd = 0.0
 
-    realized_krw = realized_usd * usd_krw
+    realized_krw = max(realized_usd * usd_krw, _config.KR_CGT_REALIZED_KRW_OVERRIDE)
     deduction = _config.KR_CGT_DEDUCTION_KRW
     headroom_krw = deduction - realized_krw
     headroom_usd = headroom_krw / usd_krw if usd_krw else 0
@@ -1352,6 +1352,28 @@ def build_report() -> str:
 
     holdings, idle_cash, _ibkr = ibkr_flex.resolve_holdings_and_cash(_config)
     _ibkr_ok = _ibkr["error"] is None and bool(_ibkr["positions"])
+
+    # 데이터 소스 표시 — IBKR 실패가 조용히 폴백으로 숨지 않도록 항상 명시
+    if _ibkr_ok:
+        lines.append(
+            f"<i>📡 IBKR 실계좌 {len(_ibkr['positions'])}종목"
+            f" · 현금 ${_ibkr['cash_usd']:,.2f}</i>"
+        )
+    else:
+        reason = _ibkr["error"] or "응답은 정상이나 포지션 0건 (Flex Query에 Open Positions 섹션 누락 의심)"
+        reason = reason.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        lines.append(f"<i>⚠️ IBKR 조회 실패 → config 폴백 사용 중</i>")
+        lines.append(f"<i>   사유: {reason}</i>")
+
+    # ── [0] 오늘 할 일 — 헌법 6조 트리거 판정 (장중 알림과 동일 로직) ──
+    try:
+        from intraday_alert import _ath_trigger_status, _decide_action
+        ath = _ath_trigger_status()
+        headline, detail = _decide_action(ath, holdings, idle_cash)
+        lines.append(f"\n👉 <b>오늘 할 일: {headline}</b>")
+        lines.append(f"<i>{detail}</i>")
+    except Exception as e:
+        print(f"[now_headline] {e}")
 
     # ── [1] 주요 지표 섹션 ─────────────────────────────────────────
     lines.append("\n<b>📈 주요 지표</b>")
@@ -1587,6 +1609,32 @@ def build_report() -> str:
     if div_section:
         lines.append("\n" + "━" * 28)
         lines.append(div_section)
+
+    # ── [8-b] 이번 달 재투자 배분 (배당 + 신규 납입 → 언더웨이트 수렴) ──
+    try:
+        from action_plan import estimate_monthly_dividend_usd, split_deposit, usd_krw_rate
+        div_usd = estimate_monthly_dividend_usd(holdings)
+        deposit_krw = _config.MONTHLY_DEPOSIT_KRW
+        deposit_usd = div_usd + (deposit_krw / usd_krw_rate() if deposit_krw > 0 else 0)
+        if deposit_usd >= 1:
+            alloc_state = calc_portfolio_state(holdings, idle_cash)
+            plan = split_deposit(alloc_state, deposit_usd)
+            if plan:
+                src = []
+                if div_usd >= 0.5:
+                    src.append(f"배당 ${div_usd:,.0f}")
+                if deposit_krw > 0:
+                    src.append(f"납입 ₩{deposit_krw:,.0f}")
+                lines.append("\n" + "━" * 28)
+                lines.append(f"<b>💰 이번 달 재투자 배분</b>  {' + '.join(src)}  ≈ ${deposit_usd:,.0f}")
+                for ticker, amt, cat in plan:
+                    cur = alloc_state["categories"][cat]["current_pct"] * 100
+                    tgt = alloc_state["categories"][cat]["target_pct"] * 100
+                    gap_note = f"{cur:.0f}%→{tgt:.0f}%" if cur < tgt - 0.5 else "비중 유지"
+                    lines.append(f"  <b>{ticker}</b>  ${amt:,.0f}  <i>{gap_note}</i>")
+                lines.append("  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴 (매도 없음)</i>")
+    except Exception as e:
+        print(f"[reinvest_plan] {e}")
 
     # ── [9] 배당 일정 (배당락일 + 입금예정일) ─────────────────────
     div_sched = build_dividend_schedule_section(holdings, days_ahead=90)
