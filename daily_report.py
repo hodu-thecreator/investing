@@ -1672,7 +1672,7 @@ def build_report() -> str:
 
     # ── [8-b] 이번 달 재투자 배분 (배당 + 신규 납입 → 언더웨이트 수렴) ──
     try:
-        from action_plan import estimate_monthly_dividend_usd, split_deposit, usd_krw_rate
+        from action_plan import estimate_monthly_dividend_usd, split_deposit, usd_krw_rate, sgov_buy_note
         div_usd = estimate_monthly_dividend_usd(holdings)
         deposit_krw = _config.MONTHLY_DEPOSIT_KRW
         deposit_usd = div_usd + (deposit_krw / usd_krw_rate() if deposit_krw > 0 else 0)
@@ -1692,6 +1692,10 @@ def build_report() -> str:
                     tgt = alloc_state["categories"][cat]["target_pct"] * 100
                     gap_note = f"{cur:.0f}%→{tgt:.0f}%" if cur < tgt - 0.5 else "비중 유지"
                     lines.append(f"  <b>{ticker}</b>  ${amt:,.0f}  <i>{gap_note}</i>")
+                    if ticker == "SGOV":
+                        note = sgov_buy_note()
+                        if note:
+                            lines.append(note)
                 lines.append("  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴 (매도 없음)</i>")
     except Exception as e:
         print(f"[reinvest_plan] {e}")

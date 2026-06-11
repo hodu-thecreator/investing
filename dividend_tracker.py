@@ -81,7 +81,7 @@ def build_dividend_alert_section(state: dict, new_dividends: list[dict]) -> str:
         pass
 
     if zone_open:
-        from action_plan import split_deposit
+        from action_plan import split_deposit, sgov_buy_note
         plan = split_deposit(state, total)
         if plan:
             lines.append("  → 웅덩이 열림 — 언더웨이트 버킷에 투입:")
@@ -90,6 +90,10 @@ def build_dividend_alert_section(state: dict, new_dividends: list[dict]) -> str:
                 tgt = state["categories"][cat]["target_pct"] * 100
                 gap_note = f"{cur:.0f}%→{tgt:.0f}%" if cur < tgt - 0.5 else "비중 유지"
                 lines.append(f"    <b>{ticker}</b>  ${amt:,.2f}  <i>{gap_note}</i>")
+                if ticker == "SGOV":
+                    note = sgov_buy_note()
+                    if note:
+                        lines.append(f"  {note}")
     else:
         lines.append("  → ☀️ 만수위 — 추격 매수 금지. USD로 모아두기 (웅덩이 열리면 알림)")
 
