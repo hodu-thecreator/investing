@@ -16,6 +16,9 @@ from config import Config
 
 _config = Config()
 
+# 신규 납입 0원 모드에서 "재개 시 단축 효과" what-if 계산용 기준 금액
+WHAT_IF_MONTHLY_KRW = 500_000
+
 
 # ── 환율 ─────────────────────────────────────────────────────────
 
@@ -176,6 +179,17 @@ def build_goal_message(
         bar = "▓" * int(round(prog * 10)) + "░" * (10 - int(round(prog * 10)))
         lines.append("")
         lines.append(f"  {bar}  {prog*100:.0f}% → {_fmt_target(nxt[0])}")
+
+    # 신규 납입 0원일 때 — 재개 시 단축 효과 what-if
+    if monthly_krw <= 0 and nxt:
+        what_if_usd = monthly_usd + (WHAT_IF_MONTHLY_KRW / fx if fx else 0)
+        m_now = months_to_target(total, nxt[0], monthly_usd, r)
+        m_with = months_to_target(total, nxt[0], what_if_usd, r)
+        if m_now is not None and m_with is not None and m_now > m_with:
+            lines.append(
+                f"  💡 월 ₩{WHAT_IF_MONTHLY_KRW/10_000:.0f}만 재개 시"
+                f" {_fmt_target(nxt[0])} 도달 {(m_now - m_with)/12:.1f}년 단축"
+            )
 
     lines.append("")
     lines.append("  <i>변수는 둘뿐: 납입을 유지하는 것 + 시장에 머무르는 것.</i>")

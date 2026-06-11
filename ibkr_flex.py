@@ -96,21 +96,72 @@ def parse_trades(root: ET.Element) -> list[dict]:
             continue
         try:
             trades.append({
-                "symbol": sym,
-                "date":   date_s,
-                "action": action,
-                "qty":    abs(float(qty)),
-                "price":  float(price),
+                "symbol":      sym,
+                "date":        date_s,
+                "action":      action,
+                "qty":         abs(float(qty)),
+                "price":       float(price),
+                "realized_pnl": float(t.get("fifoPnlRealized") or 0),
             })
         except (ValueError, TypeError):
             continue
     return trades
 
 
+_DIVIDEND_TYPES = {"Dividends", "Payment In Lieu Of Dividends"}
+
+
+def parse_dividends(root: ET.Element) -> list[dict]:
+    """배당 입금 내역 (CashTransaction, USD). 입금 감지·재투자 지시용."""
+    out = []
+    for ct in root.iter("CashTransaction"):
+        if ct.get("type") not in _DIVIDEND_TYPES:
+            continue
+        if ct.get("currency") != "USD":
+            continue
+        sym    = ct.get("symbol")
+        date_s = ct.get("dateTime") or ct.get("settleDate")
+        amount = ct.get("amount")
+        if not all([sym, date_s, amount]):
+            continue
+        try:
+            out.append({
+                "symbol": sym,
+                "date":   date_s[:10],
+                "amount": float(amount),
+            })
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
+def _parse_date(s: str):
+    """Flex Query 날짜 포맷은 설정에 따라 'YYYY-MM-DD' 또는 'YYYYMMDD' 둘 다 가능."""
+    import datetime as _dt
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return _dt.datetime.strptime(s[:10].replace("-", "") if fmt == "%Y%m%d" else s[:10], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def realized_ytd_from_trades(trades: list[dict], year: int | None = None) -> float:
+    """IBKR 체결의 fifoPnlRealized 합계로 올해 실현손익(USD) 계산."""
+    import datetime as _dt
+    year = year or _dt.datetime.now().year
+    total = 0.0
+    for t in trades:
+        d = _parse_date(t.get("date", ""))
+        if d and d.year == year:
+            total += t.get("realized_pnl", 0)
+    return round(total, 2)
+
+
 def get_account_data() -> dict:
     """
     IBKR 계좌 전체 조회. 토큰 미설정/네트워크 오류 시 error 필드에 메시지.
-    Returns: {positions, cash_usd, trades, error}
+    Returns: {positions, cash_usd, trades, dividends, error}
     """
     try:
         root = ET.fromstring(fetch_flex_xml())
@@ -118,6 +169,7 @@ def get_account_data() -> dict:
             "positions": parse_positions(root),
             "cash_usd":  parse_cash(root),
             "trades":    parse_trades(root),
+            "dividends": parse_dividends(root),
             "error":     None,
         }
     except _FLEX_EXC as e:
@@ -126,7 +178,9 @@ def get_account_data() -> dict:
             "positions": {},
             "cash_usd":  0.0,
             "trades":    [],
+            "dividends": [],
         }
+
 
 
 def resolve_holdings_and_cash(config) -> tuple[dict, float, dict]:

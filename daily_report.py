@@ -1109,7 +1109,7 @@ def build_milestone_section(total_portfolio: float) -> str:
 
 # ── 한국 양도세 공제 추적 (헌법 9조, 한국 phase 한정) ─────────────
 
-def build_kr_tax_section(usd_krw: float) -> str:
+def build_kr_tax_section(usd_krw: float, ibkr: dict | None = None) -> str:
     """
     한국 phase(2026.5~2027.11) 양도세 250만원 연 공제 활용 추적.
     유일하게 허용되는 매도(전략적 부분 매도+즉시 재매수로 평단 스텝업).
@@ -1122,12 +1122,8 @@ def build_kr_tax_section(usd_krw: float) -> str:
     if not usd_krw or usd_krw <= 0:
         return ""
 
-    try:
-        from transactions import realized_ytd
-        realized_usd = realized_ytd()
-    except Exception as e:
-        print(f"[kr_tax] realized_ytd 실패: {e}")
-        realized_usd = 0.0
+    from tax_korea import realized_ytd_usd
+    realized_usd = realized_ytd_usd(ibkr)
 
     realized_krw = max(realized_usd * usd_krw, _config.KR_CGT_REALIZED_KRW_OVERRIDE)
     deduction = _config.KR_CGT_DEDUCTION_KRW
@@ -1660,7 +1656,7 @@ def build_report() -> str:
     # ── [11] 한국 양도세 공제 추적 (한국 phase 한정) ──────────────
     try:
         krw_rate = (indicators.get("usd_krw", {}) or {}).get("usd_to_krw", 0)
-        tax_section = build_kr_tax_section(krw_rate)
+        tax_section = build_kr_tax_section(krw_rate, _ibkr)
         if tax_section:
             lines.append("\n" + "━" * 28)
             lines.append(tax_section)
