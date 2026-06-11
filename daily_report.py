@@ -1632,6 +1632,20 @@ def build_report() -> str:
     except Exception as e:
         print(f"[reinvest_plan] {e}")
 
+    # ── [8-c] 배당 입금 감지 (IBKR 실제 입금 → 즉시 재투자 지시) ───
+    if _ibkr_ok and _ibkr.get("dividends"):
+        try:
+            import dividend_tracker
+            new_divs = dividend_tracker.find_new_dividends(_ibkr["dividends"])
+            if new_divs:
+                div_state = calc_portfolio_state(holdings, idle_cash)
+                div_alert = dividend_tracker.build_dividend_alert_section(div_state, new_divs)
+                if div_alert:
+                    lines.append("\n" + "━" * 28)
+                    lines.append(div_alert)
+        except Exception as e:
+            print(f"[dividend_tracker] {e}")
+
     # ── [9] 배당 일정 (배당락일 + 입금예정일) ─────────────────────
     div_sched = build_dividend_schedule_section(holdings, days_ahead=90)
     if div_sched:

@@ -40,12 +40,12 @@ jobs:
           FORCE_SEND: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
         run: python daily_report.py
 
-      - name: Commit asset history
+      - name: Commit data snapshots
         run: |
-          if ! git diff --quiet -- data/asset_history.json; then
+          if ! git diff --quiet -- data/asset_history.json data/dividend_state.json; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add data/asset_history.json
-            git commit -m "chore: 자산 추이 스냅샷 갱신 ($(date +%Y-%m-%d))"
+            git add data/asset_history.json data/dividend_state.json
+            git commit -m "chore: 자산 추이/배당 입금 상태 갱신 ($(date +%Y-%m-%d))"
             git push origin HEAD:main
           fi
