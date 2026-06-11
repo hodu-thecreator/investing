@@ -1353,6 +1353,18 @@ def build_report() -> str:
     holdings, idle_cash, _ibkr = ibkr_flex.resolve_holdings_and_cash(_config)
     _ibkr_ok = _ibkr["error"] is None and bool(_ibkr["positions"])
 
+    # 데이터 소스 표시 — IBKR 실패가 조용히 폴백으로 숨지 않도록 항상 명시
+    if _ibkr_ok:
+        lines.append(
+            f"<i>📡 IBKR 실계좌 {len(_ibkr['positions'])}종목"
+            f" · 현금 ${_ibkr['cash_usd']:,.2f}</i>"
+        )
+    else:
+        reason = _ibkr["error"] or "응답은 정상이나 포지션 0건 (Flex Query에 Open Positions 섹션 누락 의심)"
+        reason = reason.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        lines.append(f"<i>⚠️ IBKR 조회 실패 → config 폴백 사용 중</i>")
+        lines.append(f"<i>   사유: {reason}</i>")
+
     # ── [0] 오늘 할 일 — 헌법 6조 트리거 판정 (장중 알림과 동일 로직) ──
     try:
         from intraday_alert import _ath_trigger_status, _decide_action
