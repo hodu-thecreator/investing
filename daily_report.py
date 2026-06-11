@@ -161,11 +161,11 @@ def calc_macro_risk_score(indicators: dict) -> tuple[int, list[str]]:
 
 
 def calc_cash_target(risk_score: int) -> float:
-    """현금(SGOV) 목표 비중 — 헌법 5조 기준 29% 고정.
+    """현금(SGOV) 목표 비중 — 헌법 5조 기준 20% 고정.
     위험 점수가 매우 높으면 소폭 상향(방어), 그 외엔 헌법값 유지."""
-    base = Config.CORE_ALLOCATION["SGOV"]  # 0.29
+    base = Config.CORE_ALLOCATION["SGOV"]  # 0.20
     if risk_score >= 7:
-        return max(base, 0.32)
+        return max(base, 0.25)
     return base
 
 
@@ -1156,7 +1156,7 @@ def build_leverage_harvest_plan(
 
     트리거 3가지 모두 충족 시만 표시:
       1. S&P500 ATH 대비 낙폭 -3% 이내 (레버리지 고점 타이밍)
-      2. SGOV/현금 비중이 목표(29%) 미달 — 탄약 부족
+      2. SGOV/현금 비중이 목표(20%) 미달 — 탄약 부족
       3. 보유 레버리지 ETF 중 미실현 수익 ≥ 15% 인 것 존재
     코어(QQQM/SPYM/GLDM/IBIT)는 대상 제외 — 절대 매도 안 함.
     """
@@ -1172,7 +1172,7 @@ def build_leverage_harvest_plan(
         return ""  # 조정 중 — 레버리지 익절 타이밍 아님
 
     # Trigger 2: 현금 비중 부족
-    target_ratio = _config.CORE_ALLOCATION["SGOV"]  # 0.29
+    target_ratio = _config.CORE_ALLOCATION["SGOV"]  # 0.20
     cash_value = idle_cash
     for t, q in holdings.items():
         if not q or q <= 0:

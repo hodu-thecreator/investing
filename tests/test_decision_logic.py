@@ -38,7 +38,7 @@ def _state(values: dict[str, float], targets: dict[str, float],
 
 
 class TestSplitDeposit(unittest.TestCase):
-    targets = {"N100": 0.30, "SP": 0.30, "금": 0.07, "BTC": 0.03, "현금": 0.29}
+    targets = {"N100": 0.35, "SP": 0.35, "금": 0.07, "BTC": 0.03, "현금": 0.20}
     preferred = {"N100": "QQQM", "SP": "SPYM", "금": "GLDM", "BTC": "IBIT", "현금": "SGOV"}
 
     def test_underweight_first(self):
@@ -178,20 +178,20 @@ class TestCoreTrim(unittest.TestCase):
         }
 
     def test_skips_when_far_from_ath(self):
-        out = self.build(-5.0, 0.20, 0.29, self.judged_hot, self.holdings)
+        out = self.build(-5.0, 0.12, 0.20, self.judged_hot, self.holdings)
         self.assertEqual(out, "")
 
     def test_skips_when_cash_sufficient(self):
-        out = self.build(-1.0, 0.27, 0.29, self.judged_hot, self.holdings)
+        out = self.build(-1.0, 0.18, 0.20, self.judged_hot, self.holdings)
         self.assertEqual(out, "")
 
     def test_skips_when_no_overheated(self):
         cool = {t: {"rsi": 50} for t in self.judged_hot}
-        out = self.build(-1.0, 0.20, 0.29, cool, self.holdings)
+        out = self.build(-1.0, 0.12, 0.20, cool, self.holdings)
         self.assertEqual(out, "")
 
     def test_trims_most_overheated(self):
-        out = self.build(-1.0, 0.20, 0.29, self.judged_hot, self.holdings)
+        out = self.build(-1.0, 0.12, 0.20, self.judged_hot, self.holdings)
         self.assertIn("QQQM", out)
         self.assertIn("RSI 75", out)
         self.assertNotIn("SPYM", out)

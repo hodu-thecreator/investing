@@ -4,13 +4,13 @@ load_dotenv()
 
 class Config:
     ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "QQQM,SPYM,GLDM,IBIT,SGOV,SPMO,QLD,TQQQ,SSO,UPRO").split(",")
+    WATCH_STOCKS = os.getenv("WATCH_STOCKS", "QQQM,SPYM,GLDM,IBIT,SGOV,SPMO,SOXQ,QLD,TQQQ,SSO,UPRO").split(",")
     WATCH_CRYPTO = os.getenv("WATCH_CRYPTO", "bitcoin,ethereum,solana").split(",")
     # 적립·모니터링 대상 포트폴리오
     ACCUMULATION_PORTFOLIO = os.getenv(
         "ACCUMULATION_PORTFOLIO",
         "QQQM,SPYM,GLDM,IBIT,SGOV,"       # 코어 5종목 (GLDM 미보유 → 목표)
-        "SPMO,"                            # 위성 (상한 10%, 저수지 구간 매수)
+        "SPMO,SOXQ,"                       # 위성 (각 상한 10%, 저수지 구간 매수)
         "QLD,TQQQ,SSO,UPRO,"              # 레버리지 (조정 시 전술)
         "QQQI,SPYI",                       # 레거시 (정리 중)
     ).replace(" ", "").split(",")
@@ -35,8 +35,8 @@ class Config:
 
 
     # ── 현금 관리 ─────────────────────────────────────────────────
-    # 헌법 5조: SGOV 목표 29%
-    TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.29"))
+    # 헌법 5조: SGOV 목표 20% (2026.6 개정 — 기존 29%)
+    TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.20"))
     CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
     IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "50.65"))  # 미사용 USD 잔고
 
@@ -48,13 +48,13 @@ class Config:
     # 코드는 이 상수를 단일 진실 소스로 사용한다.
     # ════════════════════════════════════════════════════════════
 
-    # 헌법 5조 — 코어 5종목 목표 배분
+    # 헌법 5조 — 코어 5종목 목표 배분 (2026.6 개정: 현금 29→20%, 주식 균등 증액)
     CORE_ALLOCATION: dict[str, float] = {
-        "QQQM": 0.30,   # Nasdaq 100 성장
-        "SPYM": 0.30,   # S&P 500 닻
+        "QQQM": 0.35,   # Nasdaq 100 성장
+        "SPYM": 0.35,   # S&P 500 닻
         "GLDM": 0.07,   # 금 (인플레 헤지)
         "IBIT": 0.03,   # 비트코인 (통화 절하 헤지)
-        "SGOV": 0.29,   # 현금 + 매수 탄약
+        "SGOV": 0.20,   # 현금 + 매수 탄약
     }
 
     # 레버리지 → 코어 버킷 매핑 (조정 시 임시 포지션, 노출 합산용)
@@ -67,8 +67,8 @@ class Config:
     # 개별주 금지는 유지. 지수 ETF는 트랙레코드 5년+로 완화.
     # 위성은 코어를 대체하지 않음: 해당 버킷 안에서 상한까지만,
     # 매수는 저수지(웅덩이) 구간에서 신규자금·배당·레거시 정리 대금으로만.
-    SATELLITE_TICKERS: dict[str, float] = {"SPMO": 0.10}   # 총자산 대비 상한
-    SATELLITE_BUCKET: dict[str, str] = {"SPMO": "SPYM"}    # S&P500 버킷에 합산
+    SATELLITE_TICKERS: dict[str, float] = {"SPMO": 0.10, "SOXQ": 0.10}   # 총자산 대비 상한
+    SATELLITE_BUCKET: dict[str, str] = {"SPMO": "SPYM", "SOXQ": "QQQM"}  # 버킷 합산 (SOXQ=반도체→Nasdaq)
 
     # ── 저수지(웅덩이) 매수 구간 — 52주 고점 대비 종목별 낙폭 ────
     # 역할 분담: 얼마 쏠지 = 헌법 6조 S&P ATH 트리거 / 어디에 쏠지 = 종목별 수위
@@ -79,8 +79,8 @@ class Config:
         {"dd": -15, "label": "🔴 깊은 저수지", "action": "분할 매수 2차 — 역사적 기대수익 구간"},
         {"dd": -25, "label": "🟣 댐 바닥",     "action": "최대 매수 구간 — 비상금 외 적극 매수"},
     ]
-    RESERVOIR_SCALE: dict[str, float] = {"IBIT": 3.0}
-    RESERVOIR_WATCH: list[str] = ["QQQM", "SPYM", "SPMO", "GLDM", "IBIT"]
+    RESERVOIR_SCALE: dict[str, float] = {"IBIT": 3.0, "SOXQ": 1.5}   # 반도체는 낙폭 1.5배 보정
+    RESERVOIR_WATCH: list[str] = ["QQQM", "SPYM", "SPMO", "SOXQ", "GLDM", "IBIT"]
 
     # ── 개별주 워치리스트 — 정보용 (이 계좌는 매수 안 함, 헌법 4조 그대로) ──
     INDIVIDUAL_WATCHLIST: list[str] = ["NVDA", "TSLA", "AEHR"]
@@ -92,7 +92,8 @@ class Config:
     CORE_TRIM_PCT = 0.05         # 과열 종목의 5%만 부분 익절
 
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
-    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXQ", "SOXL", "SOXX", "USD",
+    # SOXQ는 2026.6 위성 승격으로 레거시에서 제외 (트랙레코드 5년 충족)
+    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXL", "SOXX", "USD",
                                  "SCHD", "DIVO", "DGRW", "QDVO", "ETN",
                                  "MU", "VRT", "AEHR", "GEV", "NVDA", "AVGO",
                                  "CCJ", "CEG", "XOM", "COPX", "BITX", "ETHU",

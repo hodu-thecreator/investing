@@ -21,19 +21,19 @@ _config = Config()
 
 # ── 헌법 5조: 코어 5종목 목표 비중 ────────────────────────────────
 # 레버리지(SSO/UPRO/QLD/TQQQ)는 조정 시 임시 포지션 — 각 코어 노출에 합산.
-# SPYI/QQQI/SOXQ 등 레거시는 미분류로 빠지며 정리 대상.
+# SPYI/QQQI 등 레거시는 미분류로 빠지며 정리 대상. SOXQ는 2026.6 위성 승격.
 TARGET_ALLOCATION: dict[str, dict] = {
     "S&P500": {
-        "target": 0.30,
+        "target": 0.35,
         "tickers": ["SPYM", "SPMO", "SSO", "UPRO"],   # SPMO = 위성(상한 10%), SSO/UPRO = 레버 노출
         "preferred": ["SPYM"],
         "note": "조정 시 SSO/UPRO 임시 매수 — 평시엔 SPYM, 위성 SPMO는 저수지 구간만",
     },
     "Nasdaq100": {
-        "target": 0.30,
-        "tickers": ["QQQM", "QLD", "TQQQ"],   # QLD/TQQQ = Nasdaq 레버 노출
+        "target": 0.35,
+        "tickers": ["QQQM", "SOXQ", "QLD", "TQQQ"],   # SOXQ = 위성(상한 10%), QLD/TQQQ = 레버 노출
         "preferred": ["QQQM"],
-        "note": "조정 시 QLD/TQQQ 임시 매수 — 평시엔 QQQM",
+        "note": "조정 시 QLD/TQQQ 임시 매수 — 평시엔 QQQM, 위성 SOXQ는 저수지 구간만",
     },
     "금": {
         "target": 0.07,
@@ -46,7 +46,7 @@ TARGET_ALLOCATION: dict[str, dict] = {
         "preferred": ["IBIT"],
     },
     "현금": {
-        "target": 0.29,
+        "target": 0.20,
         "tickers": ["SGOV", "BIL", "SHV", "SHY"],
         "preferred": ["SGOV"],
     },
