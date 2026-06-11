@@ -105,9 +105,9 @@ def evaluate(ticker: str) -> str:
     checks.append(("출처가 Bloomberg/Reuters급", None, "직접 확인"))
     checks.append(("주요 기관 보고서에 존재", None, "직접 확인"))
 
-    # 6~7. 자산배분 빈자리 / 단순 원칙 — 자동 (코어5+위성1 꽉 참 → 위성 교체만 가능)
-    checks.append(("현재 자산배분에 빈 자리", False, "코어5+위성1 꽉 참 (위성 교체만 가능)"))
-    checks.append(("코어5+위성1 단순 원칙 유지", False, f"{ticker} 추가 시 초과"))
+    # 6~7. 자산배분 빈자리 / 단순 원칙 — 자동 (코어5+위성2 꽉 참 → 위성 교체만 가능)
+    checks.append(("현재 자산배분에 빈 자리", False, "코어5+위성2 꽉 참 (위성 교체만 가능)"))
+    checks.append(("코어5+위성2 단순 원칙 유지", False, f"{ticker} 추가 시 초과"))
 
     # 8. 30년 보유 가능 — 수동
     checks.append(("20~30년 보유 가능", None, "스스로에게 질문"))

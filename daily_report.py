@@ -351,10 +351,14 @@ def _calc_deployable_cash(holdings: dict[str, float], idle_cash: float) -> tuple
 
 
 def _lev_exposure(positions: dict, bucket: str | None = None) -> float:
-    """레버리지 ETF 현재 평가액 합산. bucket 지정 시 해당 코어 노출만."""
+    """레버리지 ETF 현재 평가액 합산. bucket 지정 시 해당 버킷 노출만.
+    미지정 시 헌법 6조 조정 트리거 캡 기준(QQQM/SPYM)만 — SOXQ 위성 레버 제외."""
     total = 0.0
-    for tk, core in _config.LEVERAGE_BUCKET.items():
-        if bucket and core != bucket:
+    for tk, b in _config.LEVERAGE_BUCKET.items():
+        if bucket:
+            if b != bucket:
+                continue
+        elif b not in ("QQQM", "SPYM"):
             continue
         pos = (positions or {}).get(tk)
         if pos:
@@ -1198,7 +1202,7 @@ def build_leverage_harvest_plan(
     except Exception:
         tx_summary = {}
 
-    lev_tickers = list(_config.LEVERAGE_BUCKET.keys())  # QLD, TQQQ, SSO, UPRO
+    lev_tickers = list(_config.LEVERAGE_BUCKET.keys())  # QLD, TQQQ, SSO, UPRO, SOXL, USD
     candidates: list[dict] = []
 
     for t in lev_tickers:

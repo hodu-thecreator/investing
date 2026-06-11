@@ -48,19 +48,22 @@ class Config:
     # 코드는 이 상수를 단일 진실 소스로 사용한다.
     # ════════════════════════════════════════════════════════════
 
-    # 헌법 5조 — 코어 5종목 목표 배분 (2026.6 개정: 현금 29→20%, 주식 균등 증액)
+    # 헌법 5조 — 목표 배분 (2026.6 개정: 현금 29→20%, 반도체 슬라이스 신설)
+    # 비중은 대략적 파이 가이드 — 다소 어긋나도 OK (±10%p 드리프트만 경고).
+    # 반도체 10%는 위성 SOXQ 슬라이스 (SOXL/USD 레버 합산) — 합계 90% + 반도체 10%.
     CORE_ALLOCATION: dict[str, float] = {
-        "QQQM": 0.35,   # Nasdaq 100 성장
-        "SPYM": 0.35,   # S&P 500 닻
+        "QQQM": 0.30,   # Nasdaq 100 성장
+        "SPYM": 0.30,   # S&P 500 닻
         "GLDM": 0.07,   # 금 (인플레 헤지)
         "IBIT": 0.03,   # 비트코인 (통화 절하 헤지)
         "SGOV": 0.20,   # 현금 + 매수 탄약
     }
 
-    # 레버리지 → 코어 버킷 매핑 (조정 시 임시 포지션, 노출 합산용)
+    # 레버리지 → 버킷 매핑 (조정 시 임시 포지션, 노출 합산용)
     LEVERAGE_BUCKET: dict[str, str] = {
         "QLD": "QQQM", "TQQQ": "QQQM",     # Nasdaq 노출
         "SSO": "SPYM", "UPRO": "SPYM",     # S&P 노출
+        "SOXL": "SOXQ", "USD": "SOXQ",     # 반도체 노출 (3x/2x)
     }
 
     # ── 위성(satellite) 지수 ETF — 2026.6 헌법 개정 ──────────────
@@ -68,7 +71,7 @@ class Config:
     # 위성은 코어를 대체하지 않음: 해당 버킷 안에서 상한까지만,
     # 매수는 저수지(웅덩이) 구간에서 신규자금·배당·레거시 정리 대금으로만.
     SATELLITE_TICKERS: dict[str, float] = {"SPMO": 0.10, "SOXQ": 0.10}   # 총자산 대비 상한
-    SATELLITE_BUCKET: dict[str, str] = {"SPMO": "SPYM", "SOXQ": "QQQM"}  # 버킷 합산 (SOXQ=반도체→Nasdaq)
+    SATELLITE_BUCKET: dict[str, str] = {"SPMO": "SPYM"}    # SPMO는 S&P 버킷 합산, SOXQ는 자체 반도체 슬라이스
 
     # ── 저수지(웅덩이) 매수 구간 — 52주 고점 대비 종목별 낙폭 ────
     # 역할 분담: 얼마 쏠지 = 헌법 6조 S&P ATH 트리거 / 어디에 쏠지 = 종목별 수위
@@ -92,8 +95,8 @@ class Config:
     CORE_TRIM_PCT = 0.05         # 과열 종목의 5%만 부분 익절
 
     # 청산 예정 레거시 종목 (헌법 5종목 외 — 신규 매수 금지, 세금 룰 따라 정리)
-    # SOXQ는 2026.6 위성 승격으로 레거시에서 제외 (트랙레코드 5년 충족)
-    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXL", "SOXX", "USD",
+    # SOXQ는 2026.6 위성 승격, SOXL/USD는 반도체 레버 노출로 분류 → 레거시 제외
+    LEGACY_TICKERS: list[str] = ["QQQI", "SPYI", "SOXX",
                                  "SCHD", "DIVO", "DGRW", "QDVO", "ETN",
                                  "MU", "VRT", "AEHR", "GEV", "NVDA", "AVGO",
                                  "CCJ", "CEG", "XOM", "COPX", "BITX", "ETHU",
