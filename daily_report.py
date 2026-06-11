@@ -1697,6 +1697,17 @@ def build_report() -> str:
     except Exception as e:
         print(f"[milestone] {e}")
 
+    # ── [13] 거주국 로드맵 (헌법 1·9조 — phase 전환 D-day + 레거시 정리) ──
+    try:
+        import residency_roadmap
+        roadmap_state = calc_portfolio_state(holdings, idle_cash) if _total_portfolio > 0 else None
+        roadmap_section = residency_roadmap.build_roadmap_section(roadmap_state)
+        if roadmap_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(roadmap_section)
+    except Exception as e:
+        print(f"[residency_roadmap] {e}")
+
     lines.append("\n" + "━" * 28)
     lines.append("🤖 <i>Stock Agent — 평일 미국 장 오픈 후 30분 자동 발송 (DST 자동 반영)</i>")
 

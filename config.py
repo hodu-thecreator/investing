@@ -106,6 +106,10 @@ class Config:
     # 헌법 9조 — 한국 phase 양도세 (2026.5~2027.11)
     KR_CGT_DEDUCTION_KRW = 2_500_000      # 연 250만원 공제
     KR_PHASE_END = "2027-11"
+
+    # 헌법 1·9조 — 거주국 phase 전환 일정 (NZ Transitional 시작 = KR_PHASE_END)
+    NZ_FIF_START = "2031-11"   # NZ Transitional → FIF (FDR 5% deemed income, 1년)
+    AU_MOVE = "2032-11"        # NZ → 호주 (영구 정착)
     # 거래기록(.transactions.json) 미동기화 시 실현차익 하한 — 사용자가 직접 갱신.
     # 올해 250만원 공제를 이미 소진했다면 250만원으로 설정해 매도 플랜이 막히게 함.
     KR_CGT_REALIZED_KRW_OVERRIDE = float(os.getenv("KR_CGT_REALIZED_KRW_OVERRIDE", "2500000"))
