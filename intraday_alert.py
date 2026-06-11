@@ -90,10 +90,10 @@ def _decide_action(ath: dict | None, holdings: dict, idle_cash: float) -> tuple[
 
     if active is None:
         nxt = ath["triggers"][0]
-        gap = nxt["drop"] - dd
+        gap = dd - nxt["drop"]
         return (
             "자동투자만 유지 — 추가 행동 없음",
-            f"ATH 대비 {dd:+.1f}%  ·  다음 트리거({nxt['drop']}%)까지 {gap:.1f}%p",
+            f"ATH 대비 {dd:+.1f}%  ·  다음 트리거({nxt['drop']}%)까지 {gap:.1f}%p 남음",
         )
 
     from config import Config
