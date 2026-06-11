@@ -39,6 +39,8 @@ class Config:
     TARGET_CASH_RATIO = float(os.getenv("TARGET_CASH_RATIO", "0.20"))
     CASH_TICKERS = ["SGOV", "BIL", "SHV", "SHY"]  # 현금성 자산
     IDLE_CASH_USD = float(os.getenv("IDLE_CASH_USD", "50.65"))  # 미사용 USD 잔고
+    # 배당이 USD로 이만큼 이상 쌓여 있으면 "노는 돈" 알림 (DRIP 대신 모아서 웅덩이에 투입)
+    IDLE_CASH_ALERT_USD = float(os.getenv("IDLE_CASH_ALERT_USD", "150"))
 
     # ── 정기 적립 스케줄 (자동 매수 비활성화) ───────────────────
     DCA_SCHEDULE: dict[str, dict] = {}

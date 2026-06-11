@@ -248,6 +248,12 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
     if risk_signals:
         lines.append(f"  <i>위험 신호: {' · '.join(risk_signals[:3])}</i>")
 
+    # 노는 돈 감지 — 배당이 USD로 쌓여만 있으면 안내 (DRIP 대신 웅덩이에 투입)
+    if idle_cash >= _config.IDLE_CASH_ALERT_USD:
+        lines.append(
+            f"  💤 노는 USD <b>${idle_cash:,.0f}</b> — 웅덩이 열리면 1순위 투입 (저수지 섹션 참고)"
+        )
+
     return "\n".join(lines), available_cash, total_value
 
 

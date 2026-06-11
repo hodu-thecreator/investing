@@ -114,18 +114,24 @@ def build_reservoir_section(state: dict | None = None) -> str:
         )
 
     deepest = levels[0]
+    idle = (state or {}).get("idle_cash", 0) or 0
     if deepest["zone_idx"] > 0:
         lines.append("")
         lines.append(f"  👉 <b>{deepest['ticker']}</b> 우선 — {zone_action(deepest['zone_idx'])}")
+        if idle >= _config.IDLE_CASH_ALERT_USD:
+            lines.append(f"  💤 노는 돈 <b>${idle:,.0f}</b> — 여기에 먼저 투입")
         lines.append("  <i>얼마 쏠지는 헌법 6조 S&P 트리거 기준 (/now 확인)</i>")
     else:
         lines.append("  <i>전 종목 만수위 — 정기 매수만, 추격 금지</i>")
+        if idle >= _config.IDLE_CASH_ALERT_USD:
+            lines.append(f"  💤 노는 돈 <b>${idle:,.0f}</b> — 대기 OK, 웅덩이 열리면 알림함")
     return "\n".join(lines)
 
 
 # ── 장중 구간 진입 알림 (bot_once 폴링에서 호출) ──────────────────
 
-def check_zone_alerts(state: dict, holdings: dict | None = None) -> bool:
+def check_zone_alerts(state: dict, holdings: dict | None = None,
+                      idle_cash: float = 0.0) -> bool:
     """종목이 더 깊은 웅덩이로 진입하면 알림. state는 inline mutate.
 
     회복해서 얕은 구간으로 올라오면 기록도 따라 올라감 → 재하락 시 재알림(재무장).
@@ -195,6 +201,10 @@ def check_zone_alerts(state: dict, holdings: dict | None = None) -> bool:
         lines.append(f"<i>{detail}</i>")
     except Exception as e:
         print(f"[reservoir] 트리거 판정 실패: {e}")
+
+    # 노는 돈 — 모아둔 배당 USD가 있으면 이 웅덩이가 쓸 타이밍
+    if idle_cash >= _config.IDLE_CASH_ALERT_USD:
+        lines.append(f"\n💤 노는 돈 <b>${idle_cash:,.0f}</b> — 이 웅덩이에 1순위 투입")
 
     lines.append("\n<i>떨어진 게 아니라 싸진 거예요. 웅덩이가 깊을수록 좋은 가격.</i>")
 
