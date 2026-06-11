@@ -109,3 +109,11 @@ class Config:
     # 비상금 (-30% 총동원에서도 제외)
     EMERGENCY_FUND_USD = float(os.getenv("EMERGENCY_FUND_USD", "10000"))
 
+    # ── 결정 엔진 (/now, /goal, /tax) ────────────────────────────
+    # 헌법 1조: 월 납입 가능 ₩150~200만 → 기본값 중간치
+    MONTHLY_DEPOSIT_KRW = float(os.getenv("MONTHLY_DEPOSIT_KRW", "1750000"))
+    # 마일스톤 ETA 계산용 장기 기대수익률 (보수적 가정)
+    EXPECTED_ANNUAL_RETURN = float(os.getenv("EXPECTED_ANNUAL_RETURN", "0.07"))
+    # USD/KRW 환율 조회 실패 시 폴백
+    FX_USDKRW_FALLBACK = float(os.getenv("FX_USDKRW_FALLBACK", "1400"))
+

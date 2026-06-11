@@ -388,9 +388,69 @@ def handle_ibkrsync(chat_id: int):
         send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
 
 
+def _parse_krw_arg(arg: str) -> float | None:
+    """'200' → 200만원, '2000000' → 2,000,000원. 미입력/오류 시 None."""
+    arg = arg.replace(",", "").replace("만", "").strip()
+    if not arg:
+        return None
+    try:
+        v = float(arg)
+        return v * 10_000 if v < 10_000 else v
+    except ValueError:
+        return None
+
+
+def handle_now(chat_id: int, arg: str):
+    try:
+        send_message("⏳ 지금 할 일 계산 중...", chat_id=str(chat_id))
+        import action_plan
+        holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config)
+        monthly_krw = _parse_krw_arg(arg)
+        send_message(
+            action_plan.build_now_message(holdings, idle_cash, monthly_krw),
+            chat_id=str(chat_id),
+        )
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_goal(chat_id: int, arg: str):
+    try:
+        import action_plan
+        from rebalancing import calc_portfolio_state
+        holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config)
+        total = calc_portfolio_state(holdings, idle_cash).get("total", 0)
+        monthly_krw = _parse_krw_arg(arg)
+        send_message(action_plan.build_goal_message(total, monthly_krw), chat_id=str(chat_id))
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_tax(chat_id: int):
+    try:
+        send_message("⏳ 절세 플랜 계산 중...", chat_id=str(chat_id))
+        import tax_korea
+        send_message(tax_korea.build_tax_message(), chat_id=str(chat_id))
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
+def handle_idea(chat_id: int, arg: str):
+    try:
+        import idea_check
+        send_message(idea_check.evaluate(arg), chat_id=str(chat_id))
+    except Exception as e:
+        send_message(f"❌ 오류: <code>{e}</code>", chat_id=str(chat_id))
+
+
 def handle_help(chat_id: int):
     send_message(
         "<b>📖 사용 가능한 명령어</b>\n\n"
+        "<b>🧭 결정 엔진</b>\n"
+        "/now [만원] — 지금 할 일 한 방에 (트리거 판정 + 납입 배분)\n"
+        "/goal — 마일스톤별 예상 도달 시기\n"
+        "/tax — 양도세 250만원 공제 매도 플랜\n"
+        "/idea TICKER — 새 종목 8문 통과제 판정\n\n"
         "<b>📊 브리핑</b>\n"
         "/briefing — 투자 브리핑 + 취향서랍 소재 한 번에\n"
         "/report — 투자 판단 브리핑만\n"
@@ -442,7 +502,15 @@ def dispatch(message: dict, state: dict):
     arg = parts[1] if len(parts) > 1 else ""
     print(f"[bot] {cmd!r} {arg!r} from {chat_id}")
 
-    if cmd == "/briefing":
+    if cmd == "/now":
+        handle_now(chat_id, arg)
+    elif cmd == "/goal":
+        handle_goal(chat_id, arg)
+    elif cmd == "/tax":
+        handle_tax(chat_id)
+    elif cmd == "/idea":
+        handle_idea(chat_id, arg)
+    elif cmd == "/briefing":
         handle_full_briefing(chat_id)
     elif cmd == "/report":
         handle_report(chat_id)
