@@ -4,10 +4,10 @@
 실행: python -m unittest tests.test_decision_logic -v
 """
 import sys
-import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -203,6 +203,7 @@ class TestCoreTrim(unittest.TestCase):
         self.assertIn("QQQM", out)
         self.assertIn("RSI 75", out)
         self.assertNotIn("SPYM", out)
+        self.assertIn("전략적 교체 제안", out)
 
     def test_cash_depleted_triggers_without_ath(self):
         """매수 탄약이 완전히 바닥나면 S&P ATH 근처가 아니어도 트림 안내 (2026.6 신설)."""
@@ -216,43 +217,75 @@ class TestCoreTrim(unittest.TestCase):
         self.assertEqual(out, "")
 
 
-class TestSatelliteCandidates(unittest.TestCase):
-    """위성 한도(2개) 유지 + 통과 종목은 정보성 후보로만 기록 (2026.6 신설)."""
+class TestReservoirStages(unittest.TestCase):
+    """저수지 단계 표기 + 탄약 투입액 계산 (2026.6 개정)."""
 
     def setUp(self):
-        import idea_check
-        self.idea_check = idea_check
-        self._orig_file = idea_check.CANDIDATES_FILE
-        self._tmpdir = tempfile.TemporaryDirectory()
-        idea_check.CANDIDATES_FILE = Path(self._tmpdir.name) / "satellite_candidates.json"
+        import reservoir
+        self.reservoir = reservoir
 
-    def tearDown(self):
-        self.idea_check.CANDIDATES_FILE = self._orig_file
-        self._tmpdir.cleanup()
+    def test_zone_label_numbered(self):
+        self.assertEqual(self.reservoir.zone_label(0), "0단계 (만수위)")
+        self.assertEqual(self.reservoir.zone_label(1), "1단계")
+        self.assertEqual(self.reservoir.zone_label(2), "2단계")
 
-    def test_save_and_load_roundtrip(self):
-        self.idea_check._save_candidate(
-            "SCHG", {"name": "Schwab US Large-Cap Growth ETF", "expense_pct": 0.04, "aum": 3.0e10}
-        )
-        candidates = self.idea_check._load_candidates()
-        self.assertIn("SCHG", candidates)
-        self.assertEqual(candidates["SCHG"]["expense_pct"], 0.04)
-        self.assertIn("first_seen", candidates["SCHG"])
+    def test_zone_fire_increases_with_depth(self):
+        fires = [self.reservoir.zone_fire(i) for i in range(0, 5)]
+        for a, b in zip(fires, fires[1:]):
+            self.assertLessEqual(a, b)
+        self.assertEqual(self.reservoir.zone_fire(0), 0.0)
+        self.assertEqual(self.reservoir.zone_fire(4), 1.0)
 
-    def test_load_missing_file_returns_empty(self):
-        self.assertEqual(self.idea_check._load_candidates(), {})
+    def test_build_reservoir_section_shows_dollar_amount(self):
+        levels = [
+            {"ticker": "GLDM", "price": 50.0, "high": 60.0, "dd": -10.0,
+             "scale": 1.0, "zone_idx": 2},
+        ]
+        state = {"ticker_values": {"SGOV": 8_000}, "idle_cash": 2_000, "total": 50_000}
+        with patch.object(self.reservoir, "fetch_levels", return_value=levels):
+            out = self.reservoir.build_reservoir_section(state)
+        self.assertIn("2단계", out)
+        self.assertIn("$2,500", out)  # (8000+2000) * 25%
 
-    def test_core_trim_notes_recorded_candidates(self):
-        from core_trim import build_core_trim_section
-        self.idea_check._save_candidate("SCHG", {"name": "Schwab US Large-Cap Growth ETF"})
-        holdings = {"QQQM": 100, "SPYM": 100, "GLDM": 50, "IBIT": 10}
-        judged_hot = {
-            "QQQM": {"rsi": 75, "drawdown": -2.5}, "SPYM": {"rsi": 60, "drawdown": -1.0},
-            "GLDM": {"rsi": 40, "drawdown": -5.0}, "IBIT": {"rsi": 50, "drawdown": -8.0},
+    def test_build_reservoir_section_full_water(self):
+        levels = [
+            {"ticker": "QQQM", "price": 100.0, "high": 100.0, "dd": 0.0,
+             "scale": 1.0, "zone_idx": 0},
+        ]
+        with patch.object(self.reservoir, "fetch_levels", return_value=levels):
+            out = self.reservoir.build_reservoir_section({})
+        self.assertIn("0단계 (만수위)", out)
+
+
+class TestDecideAction(unittest.TestCase):
+    """ATH 트리거 판정 — '자동투자만 유지' 제거 (2026.6 개정)."""
+
+    def test_no_ath_data_returns_no_headline(self):
+        from intraday_alert import _decide_action
+        headline, detail = _decide_action(None, {}, 0)
+        self.assertIsNone(headline)
+        self.assertIn("ATH", detail)
+
+    def test_no_active_trigger_returns_no_headline(self):
+        from intraday_alert import _decide_action
+        ath = {
+            "current": 100, "ath": 101, "drawdown": -1.0, "active": None,
+            "triggers": [{"drop": -5, "fire": 0.25, "action": "core", "lev": [], "cap": 0.0}],
         }
-        out = build_core_trim_section(-1.0, 0.12, 0.20, judged_hot, holdings)
-        self.assertIn("SCHG", out)
-        self.assertIn("위성 교체 후보", out)
+        headline, detail = _decide_action(ath, {}, 0)
+        self.assertIsNone(headline)
+        self.assertIn("다음 트리거", detail)
+
+    def test_active_trigger_returns_headline(self):
+        from intraday_alert import _decide_action
+        ath = {
+            "current": 90, "ath": 100, "drawdown": -10.0,
+            "active": {"drop": -10, "fire": 0.5, "action": "core+lev", "lev": ["SSO"], "cap": 0.02},
+            "triggers": [],
+        }
+        headline, detail = _decide_action(ath, {"SGOV": 0}, 1_000)
+        self.assertIsNotNone(headline)
+        self.assertIn("QQQM", headline)
 
 
 if __name__ == "__main__":

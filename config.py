@@ -78,11 +78,12 @@ class Config:
     # ── 저수지(웅덩이) 매수 구간 — 52주 고점 대비 종목별 낙폭 ────
     # 역할 분담: 얼마 쏠지 = 헌법 6조 S&P ATH 트리거 / 어디에 쏠지 = 종목별 수위
     # scale: 변동성 큰 자산은 같은 의미의 낙폭이 더 깊음 (IBIT ≈ 주식 3배)
+    # fire: 탄약(SGOV 평가액 + 유휴 현금) 중 이 종목에 투입할 비율
     RESERVOIR_ZONES: list[dict] = [
-        {"dd": -3,  "label": "🌦 얕은 웅덩이", "action": "이번 달 납입·배당 매수를 앞당겨 실행"},
-        {"dd": -7,  "label": "🟠 저수지",      "action": "분할 매수 1차 — 탄약 비율은 ATH 트리거"},
-        {"dd": -15, "label": "🔴 깊은 저수지", "action": "분할 매수 2차 — 역사적 기대수익 구간"},
-        {"dd": -25, "label": "🟣 댐 바닥",     "action": "최대 매수 구간 — 비상금 외 적극 매수"},
+        {"dd": -3,  "label": "1단계", "fire": 0.0,  "action": "이번 달 납입·배당 매수를 앞당겨 실행"},
+        {"dd": -7,  "label": "2단계", "fire": 0.25, "action": "탄약 25% 투입"},
+        {"dd": -15, "label": "3단계", "fire": 0.50, "action": "탄약 50% 투입"},
+        {"dd": -25, "label": "4단계", "fire": 1.00, "action": "탄약 전량 투입"},
     ]
     RESERVOIR_SCALE: dict[str, float] = {"IBIT": 3.0, "SOXQ": 1.5}   # 반도체는 낙폭 1.5배 보정
     RESERVOIR_WATCH: list[str] = ["QQQM", "SPYM", "SPMO", "SOXQ", "GLDM", "IBIT"]

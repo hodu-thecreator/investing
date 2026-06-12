@@ -235,8 +235,11 @@ def build_now_message(
     # 1) 헌법 6조 트리거 판정 → 단일 행동 (장중 알림과 동일 로직 = 일관성)
     ath = _ath_trigger_status()
     headline, detail = _decide_action(ath, holdings, idle_cash)
-    lines.append(f"\n👉 <b>{headline}</b>")
-    lines.append(f"<i>{detail}</i>")
+    if headline:
+        lines.append(f"\n👉 <b>{headline}</b>")
+        lines.append(f"<i>{detail}</i>")
+    else:
+        lines.append(f"\n<i>{detail}</i>")
 
     # 2) 이번 달 재원 배분 — 언더웨이트 버킷부터 무매도 수렴
     #    신규 납입 계획이 없으면(MONTHLY_DEPOSIT_KRW=0) 배당 재투자가 재원
@@ -251,11 +254,11 @@ def build_now_message(
             f"<b>💰 이번 달 납입 배분</b>"
             f"  ₩{monthly_krw:,.0f} ≈ ${deposit_usd:,.0f}  <i>(₩{fx:,.0f}/$)</i>"
         )
-        no_sale_note = "  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴 (매도 없음)</i>"
+        no_sale_note = "  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴</i>"
     else:
         deposit_usd = estimate_monthly_dividend_usd(holdings)
         section_title = f"<b>💰 배당 재투자 배분</b>  월 ${deposit_usd:,.0f}  <i>(신규 납입 없음)</i>"
-        no_sale_note = "  <i>→ 배당금만 언더웨이트 버킷에 재투자 (매도·추가납입 없음)</i>"
+        no_sale_note = "  <i>→ 배당금만 언더웨이트 버킷에 재투자</i>"
 
     plan = split_deposit(state, deposit_usd)
     if plan:

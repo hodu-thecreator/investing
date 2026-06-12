@@ -23,7 +23,6 @@ CHECK_COOLDOWN_SEC = 900          # 폴링 알림 점검 주기 (15분)
 MAX_ZONE_ALERTS_PER_DAY = 4
 
 # zone index: 0 = 만수위, 1~ = RESERVOIR_ZONES 순서 (깊을수록 큼)
-_FULL_LABEL = "☀️ 만수위"
 
 
 def classify(dd_pct: float, scale: float = 1.0) -> tuple[int, dict | None]:
@@ -41,14 +40,21 @@ def classify(dd_pct: float, scale: float = 1.0) -> tuple[int, dict | None]:
 
 def zone_label(idx: int) -> str:
     if idx <= 0:
-        return _FULL_LABEL
+        return "0단계 (만수위)"
     return _config.RESERVOIR_ZONES[idx - 1]["label"]
 
 
 def zone_action(idx: int) -> str:
     if idx <= 0:
-        return "정기 매수만 — 추격 매수 금지"
+        return "정기 매수만 진행"
     return _config.RESERVOIR_ZONES[idx - 1]["action"]
+
+
+def zone_fire(idx: int) -> float:
+    """이 단계에서 탄약(SGOV+유휴현금) 중 투입할 비율."""
+    if idx <= 0:
+        return 0.0
+    return _config.RESERVOIR_ZONES[idx - 1]["fire"]
 
 
 def fetch_levels(tickers: list[str] | None = None) -> list[dict]:
@@ -115,16 +121,29 @@ def build_reservoir_section(state: dict | None = None) -> str:
 
     deepest = levels[0]
     idle = (state or {}).get("idle_cash", 0) or 0
+    sgov_value = (state or {}).get("ticker_values", {}).get("SGOV", 0) or 0
+    available_cash = sgov_value + idle
+
+    lines.append("")
     if deepest["zone_idx"] > 0:
-        lines.append("")
-        lines.append(f"  👉 <b>{deepest['ticker']}</b> 우선 — {zone_action(deepest['zone_idx'])}")
+        fire = zone_fire(deepest["zone_idx"])
+        if fire > 0 and available_cash > 0:
+            amount = available_cash * fire
+            lines.append(
+                f"  👉 <b>{deepest['ticker']}</b>  {zone_label(deepest['zone_idx'])} — "
+                f"탄약 ${available_cash:,.0f} 중 {fire*100:.0f}% = <b>${amount:,.0f}</b> 투입"
+            )
+        else:
+            lines.append(
+                f"  👉 <b>{deepest['ticker']}</b>  {zone_label(deepest['zone_idx'])} — "
+                f"{zone_action(deepest['zone_idx'])}"
+            )
         if idle >= _config.IDLE_CASH_ALERT_USD:
             lines.append(f"  💤 노는 돈 <b>${idle:,.0f}</b> — 여기에 먼저 투입")
-        lines.append("  <i>얼마 쏠지는 S&P ATH 트리거 기준 (/now 확인)</i>")
     else:
-        lines.append("  <i>전 종목 만수위 — 정기 매수만, 추격 금지</i>")
+        lines.append(f"  전 종목 {zone_label(0)} — {zone_action(0)}")
         if idle >= _config.IDLE_CASH_ALERT_USD:
-            lines.append(f"  💤 노는 돈 <b>${idle:,.0f}</b> — 대기 OK, 웅덩이 열리면 알림함")
+            lines.append(f"  💤 노는 돈 <b>${idle:,.0f}</b> — 웅덩이 열리면 투입")
     return "\n".join(lines)
 
 
@@ -169,6 +188,9 @@ def check_zone_alerts(state: dict, holdings: dict | None = None,
     if not entered:
         return False
 
+    from intraday_alert import _total_cash
+    available_cash = _total_cash(holdings or {}, idle_cash)
+
     now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%H:%M KST")
     lines = [f"<b>🏞 저수지 진입 알림</b>  {now_kst}", "━" * 28]
     for lv in entered:
@@ -176,7 +198,12 @@ def check_zone_alerts(state: dict, holdings: dict | None = None,
             f"\n💧 <b>{lv['ticker']}</b>  {zone_label(lv['zone_idx'])} 진입"
             f"  (52주 고점 대비 {lv['dd']:+.1f}%)"
         )
-        lines.append(f"   → {zone_action(lv['zone_idx'])}")
+        fire = zone_fire(lv["zone_idx"])
+        if fire > 0 and available_cash > 0:
+            amount = available_cash * fire
+            lines.append(f"   → 탄약 ${available_cash:,.0f} 중 {fire*100:.0f}% = ${amount:,.0f} 투입")
+        else:
+            lines.append(f"   → {zone_action(lv['zone_idx'])}")
         note = _satellite_note(lv["ticker"], None)
         if note:
             lines.append(f" {note.strip()}")
@@ -192,21 +219,20 @@ def check_zone_alerts(state: dict, holdings: dict | None = None,
     except Exception as e:
         print(f"[reservoir] 컨텍스트 조회 실패: {e}")
 
-    # 얼마 쏠지 — 헌법 6조 S&P 트리거 한 줄
+    # 얼마 쏠지 — 헌법 6조 S&P 트리거 한 줄 (트리거 발사 중일 때만)
     try:
         from intraday_alert import _ath_trigger_status, _decide_action
         ath = _ath_trigger_status()
-        headline, detail = _decide_action(ath, holdings or {}, 0.0)
-        lines.append(f"\n👉 <b>{headline}</b>")
-        lines.append(f"<i>{detail}</i>")
+        headline, detail = _decide_action(ath, holdings or {}, idle_cash)
+        if headline:
+            lines.append(f"\n👉 <b>{headline}</b>")
+            lines.append(f"<i>{detail}</i>")
     except Exception as e:
         print(f"[reservoir] 트리거 판정 실패: {e}")
 
     # 노는 돈 — 모아둔 배당 USD가 있으면 이 웅덩이가 쓸 타이밍
     if idle_cash >= _config.IDLE_CASH_ALERT_USD:
         lines.append(f"\n💤 노는 돈 <b>${idle_cash:,.0f}</b> — 이 웅덩이에 1순위 투입")
-
-    lines.append("\n<i>떨어진 게 아니라 싸진 거예요. 웅덩이가 깊을수록 좋은 가격.</i>")
 
     from telegram_notifier import send_message
     if not send_message("\n".join(lines)):

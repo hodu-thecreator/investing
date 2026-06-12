@@ -7,7 +7,6 @@ S&P ATH 근처(또는 현금이 사실상 0%) + RSI 과열(70+) + 현금(SGOV) �
 조건을 충족할 때만 가장 과열된 종목 보유분의 5%를 부분 매도해 SGOV로 전환.
 """
 from config import Config
-from idea_check import _load_candidates
 
 _config = Config()
 
@@ -60,10 +59,6 @@ def build_core_trim_section(
         f"현금 {cash_ratio*100:.1f}% / 목표 {target_cash_ratio*100:.0f}%"
     )
     lines.append(f"  → {ticker} {trim_qty:.2f}주(5%) 매도 → SGOV 전환, 포지션 유지")
-
-    candidates = _load_candidates()
-    if candidates:
-        names = ", ".join(sorted(candidates))
-        lines.append(f"  <i>📌 위성 교체 후보 기록: {names}</i>")
+    lines.append("  <i>재투입처는 적립 포트폴리오 점검의 전략적 교체 제안 참고</i>")
 
     return "\n".join(lines)

@@ -80,10 +80,23 @@ def _ath_trigger_status() -> dict | None:
         return None
 
 
-def _decide_action(ath: dict | None, holdings: dict, idle_cash: float) -> tuple[str, str]:
-    """ATH 트리거 상태 → (행동 한 줄, 상세 한 줄). 항상 명확한 단일 행동을 반환."""
+def _total_cash(holdings: dict, idle_cash: float) -> float:
+    """SGOV 평가액 + 유휴 현금 = 매수 탄약 총액."""
+    sgov_qty = (holdings or {}).get("SGOV", 0) or 0
+    sgov_price = 0.0
+    if sgov_qty > 0:
+        price, _ = _intraday_change("SGOV")
+        sgov_price = price or 0.0
+    return sgov_qty * sgov_price + (idle_cash or 0)
+
+
+def _decide_action(ath: dict | None, holdings: dict, idle_cash: float) -> tuple[str | None, str]:
+    """ATH 트리거 상태 → (행동 한 줄 또는 None, 상세 한 줄).
+
+    headline이 None이면 지금 발사할 트리거 없음 — 호출부는 헤드라인 없이 detail만 표시하거나 생략.
+    """
     if ath is None:
-        return "자동투자만 유지", "ATH 데이터 조회 실패 — /report 로 확인"
+        return None, "ATH 데이터 조회 실패 — /report 로 확인"
 
     dd = ath["drawdown"]
     active = ath["active"]
@@ -92,18 +105,13 @@ def _decide_action(ath: dict | None, holdings: dict, idle_cash: float) -> tuple[
         nxt = ath["triggers"][0]
         gap = dd - nxt["drop"]
         return (
-            "자동투자만 유지 — 추가 행동 없음",
+            None,
             f"ATH 대비 {dd:+.1f}%  ·  다음 트리거({nxt['drop']}%)까지 {gap:.1f}%p 남음",
         )
 
     from config import Config
 
-    sgov_qty = (holdings or {}).get("SGOV", 0) or 0
-    sgov_price = 0.0
-    if sgov_qty > 0:
-        price, _ = _intraday_change("SGOV")
-        sgov_price = price or 0.0
-    total_cash = sgov_qty * sgov_price + (idle_cash or 0)
+    total_cash = _total_cash(holdings, idle_cash)
 
     if active["action"] == "all-in":
         usable = max(0.0, total_cash - Config.EMERGENCY_FUND_USD)
@@ -136,8 +144,11 @@ def _build_alert(idx_drops: list, hold_drops: list, tier: int,
 
     lines = [f"<b>{sev} 조정 알림</b>  {now_kst} ({now_et}){no_tag}"]
     lines.append("━" * 28)
-    lines.append(f"\n👉 <b>지금 할 일: {headline}</b>")
-    lines.append(f"<i>{detail}</i>")
+    if headline:
+        lines.append(f"\n👉 <b>지금 할 일: {headline}</b>")
+        lines.append(f"<i>{detail}</i>")
+    else:
+        lines.append(f"\n<i>{detail}</i>")
     if alert_no > 1:
         lines.append("<i>↩️ 반등 후 재하락 — 새 매수타점 구간</i>")
 
@@ -149,7 +160,6 @@ def _build_alert(idx_drops: list, hold_drops: list, tier: int,
         hold_str = "  ·  ".join(f"{t} {chg:+.1f}%" for t, _, chg in hold_drops)
         lines.append(f"💼 보유 중 -3%+  {hold_str}")
 
-    lines.append("\n<i>떨어진 게 아니라 싸진 거예요. 매도 안 함. 1일 1회 이상 확인 금지.</i>")
     return "\n".join(lines)
 
 

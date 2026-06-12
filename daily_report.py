@@ -243,7 +243,6 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
             f"  🔋 탄약 {abs(diff_pct):.1f}%p 소진 (${-diff_usd:,.0f}) "
             f"— 월 납입으로 약 {months:.0f}개월 재충전"
         )
-        lines.append("  <i>매도 안 함. 조정 매수에 쓴 탄약은 납입금으로 채움.</i>")
 
     if risk_signals:
         lines.append(f"  <i>위험 신호: {' · '.join(risk_signals[:3])}</i>")
@@ -517,8 +516,6 @@ def build_correction_section(holdings: dict[str, float], idle_cash: float,
             lines.append(f"    • {w}")
         lines.append("    <i>이 신호 해소 전: TQQQ 금지, QQQ·SGOV 현금 우선</i>")
 
-    lines.append("")
-    lines.append("  <i>※ 매도 안 함. 탄약은 월 납입금으로 재충전.</i>")
     return "\n".join(lines)
 
 
@@ -735,7 +732,19 @@ def generate_accumulation_report(mkt_score: int, news_items: list[dict]) -> str:
   - 현재 보유 중이지만 thesis 훼손되었거나 중복 과도한 종목
   - 티커·이유 한 줄
 
-한국어. 간결하게."""
+<b>🔄 전략적 교체 제안</b> (판단될 때만 작성, 없으면 섹션 자체 생략):
+  - "지금은 QQQM보다 SCHG를 모으는 게 낫다"처럼, 같은 카테고리 안에서
+    신규 자금(적립·배당)을 어디로 보내는 게 더 유리한지 판단되면 제안
+    (SPYM 카테고리에서 위성 SPMO를 쓰는 것과 같은 방식 — 기존 보유분 매도 아님)
+  - 티커·대상 카테고리·이유 한 줄
+
+<b>👩‍💼 아내 개별주 후보</b> (판단될 때만 작성, 없으면 섹션 자체 생략):
+  - 호두의 5대 카테고리(S&P500/나스닥100/금/비트코인/현금성) 중 하나에 해당하면서
+    장기 보유 가치가 뛰어난 개별주가 시장에서 눈에 띌 때만 제안 (아내 별도 계좌용)
+  - 디폴트는 "없음" — 뚜렷한 종목 없으면 섹션을 쓰지 않음
+  - 티커·해당 카테고리·추천 근거 한 줄
+
+한국어. 간결하게. 판단할 근거가 부족한 섹션은 제목까지 통째로 생략하세요."""
 
     try:
         result = claude_client.call(prompt, max_tokens=1500)
@@ -1036,14 +1045,13 @@ def build_action_plan(
             ],
         ))
 
-    # 4) 거시 위험 (risk_score ≥ 7) — 방어이되 매도 안 함
+    # 4) 거시 위험 (risk_score ≥ 7) — 방어 모드 (매도 없이 탄약 비축)
     if risk_score >= 7:
         actions.append((
             "⚠️", "거시 위험 — 탄약 비축 모드",
             [
                 f"위험점수 {risk_score} — 침체/거품 신호",
                 "신규 레버리지 금지, SGOV 탄약 비축",
-                "매도 안 함. 조정 오면 기계적 매수.",
             ],
         ))
 
@@ -1337,8 +1345,7 @@ def build_leverage_harvest_plan(
     )
 
     lines.append("")
-    lines.append("  <i>※ 레버리지는 '조정 시 임시 포지션' — ATH 근처 익절 허용.</i>")
-    lines.append("  <i>코어(QQQM/SPYM/GLDM/IBIT)는 절대 매도 안 함.</i>")
+    lines.append("  <i>레버리지는 조정 시 임시 포지션 — ATH 근처 익절 가능 (코어 제외).</i>")
     return "\n".join(lines)
 
 
@@ -1376,8 +1383,9 @@ def build_report() -> str:
         from intraday_alert import _ath_trigger_status, _decide_action
         ath = _ath_trigger_status()
         headline, detail = _decide_action(ath, holdings, idle_cash)
-        lines.append(f"\n👉 <b>오늘 할 일: {headline}</b>")
-        lines.append(f"<i>{detail}</i>")
+        if headline:
+            lines.append(f"\n👉 <b>오늘 할 일: {headline}</b>")
+            lines.append(f"<i>{detail}</i>")
     except Exception as e:
         print(f"[now_headline] {e}")
 
@@ -1537,9 +1545,6 @@ def build_report() -> str:
             p = r.get("price") or 0
             dd_str = f"  ({r['drawdown']:+.1f}%)" if r.get("drawdown") else ""
             lines.append(f"  ⬜ <b>{t}</b>  (목표 {tgt_pct:.0f}%)  현재 ${p:.2f}{dd_str}  → 첫 매수 대기")
-
-    lines.append("")
-    lines.append("  <i>코어는 30년 보유. 매수는 조정 트리거(아래), 매도 안 함.</i>")
 
     # ── [2-b] 레거시 보유 종목 (청산 예정 — 세금 룰 따라) ────────────
     legacy_held = [(t, q) for t, q in holdings.items()
@@ -1711,7 +1716,7 @@ def build_report() -> str:
                         note = sgov_buy_note()
                         if note:
                             lines.append(note)
-                lines.append("  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴 (매도 없음)</i>")
+                lines.append("  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴</i>")
     except Exception as e:
         print(f"[reinvest_plan] {e}")
 
