@@ -54,21 +54,16 @@ def build_core_trim_section(
     ticker, rsi, qty, dd = overheated[0]
     trim_qty = qty * _config.CORE_TRIM_PCT
 
-    lines = ["<b>✂️ 코어 과열 부분 익절</b>  <i>(5%만)</i>"]
+    lines = ["<b>✂️ 코어 과열 부분 익절</b>"]
     lines.append(
-        f"  <b>{ticker}</b>  RSI {rsi:.0f} (과열)  ·  고점 대비 {dd:+.1f}% (꺾임)  ·  "
-        f"현금 {cash_ratio*100:.1f}% / 목표 {target_cash_ratio*100:.0f}% (부족)"
+        f"  <b>{ticker}</b>  RSI {rsi:.0f}  ·  고점 대비 {dd:+.1f}%  ·  "
+        f"현금 {cash_ratio*100:.1f}% / 목표 {target_cash_ratio*100:.0f}%"
     )
-    lines.append(f"  → {ticker} {trim_qty:.2f}주(5%) 매도 → SGOV로 전환, 포지션은 유지")
-    if cash_depleted and not near_ath:
-        lines.append("  <i>매수 탄약이 완전히 바닥나서 안내 — 탄약 있으면 안 뜨는 메시지</i>")
-    lines.append("  <i>많이 오르고 현금이 필요할 때만 — 일상적 매도 아님</i>")
+    lines.append(f"  → {ticker} {trim_qty:.2f}주(5%) 매도 → SGOV 전환, 포지션 유지")
 
     candidates = _load_candidates()
     if candidates:
         names = ", ".join(sorted(candidates))
-        lines.append(
-            f"  <i>📌 위성 교체 후보 기록 있음: {names} — 교체는 8문 통과제 재심사 후</i>"
-        )
+        lines.append(f"  <i>📌 위성 교체 후보 기록: {names}</i>")
 
     return "\n".join(lines)

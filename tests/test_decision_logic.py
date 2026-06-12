@@ -208,7 +208,7 @@ class TestCoreTrim(unittest.TestCase):
         """매수 탄약이 완전히 바닥나면 S&P ATH 근처가 아니어도 트림 안내 (2026.6 신설)."""
         out = self.build(-8.0, 0.0, 0.20, self.judged_hot, self.holdings)
         self.assertIn("QQQM", out)
-        self.assertIn("탄약이 완전히 바닥", out)
+        self.assertIn("매도", out)
 
     def test_cash_depleted_but_no_overheated_skips(self):
         cool = {t: {"rsi": 50, "drawdown": -3.0} for t in self.judged_hot}
