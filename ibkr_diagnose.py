@@ -16,6 +16,8 @@ import ibkr_flex
 
 # IBKR Flex 에러코드 → 원인/조치 (공식 문서 기준 주요 코드)
 _ERROR_HINTS = {
+    "1001": "Statement 생성 불가 (일시적) — Flex Query의 Period 설정이 'Last Business Day'나 'Today'이면 "
+            "'Last 30 Days'로 변경하세요. 장 마감 전·주말엔 데이터가 없어 이 오류가 납니다.",
     "1003": "Statement 생성 불가 — Query ID가 잘못됐거나 해당 쿼리에 권한 없음",
     "1012": "토큰 만료 — IBKR 사이트에서 Flex Web Service 토큰 재발급 필요",
     "1013": "IP 제한 — 토큰 설정의 IP 화이트리스트에 걸림 (GitHub Actions는 IP가 매번 바뀌므로 IP 제한 해제 필요)",
