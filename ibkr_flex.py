@@ -183,13 +183,28 @@ def get_account_data() -> dict:
 
 
 
-def resolve_holdings_and_cash(config) -> tuple[dict, float, dict]:
+def resolve_holdings_and_cash(config, state: dict | None = None, ttl: int = 600) -> tuple[dict, float, dict]:
     """
     IBKR 실계좌 우선, 실패 시 config 폴백.
+    state를 넘기면 ttl초간 결과를 캐싱(state["_ibkr_cache"]) — bot_once.py처럼
+    매분 호출되는 곳에서 매번 Flex statement를 새로 생성시키면 IBKR 쪽 생성
+    빈도 제한에 걸려 1001 에러가 나므로, 짧은 주기 호출은 캐시를 재사용한다.
     Returns: (holdings, idle_cash, ibkr_data)
     ibkr_data["error"]가 None이면 IBKR 사용 중 → 호출자가 추가 섹션 빌드 가능.
     """
-    data = get_account_data()
+    if state is None:
+        data = get_account_data()
+    else:
+        cache = state.get("_ibkr_cache")
+        now = time.time()
+        if cache and now - cache.get("ts", 0) < ttl:
+            data = cache["data"]
+        else:
+            data = get_account_data()
+            if data["error"] is None:
+                state["_ibkr_cache"] = {"ts": now, "data": data}
+            elif cache:
+                data = cache["data"]
     if data["error"] is None and data["positions"]:
         holdings = {sym: d["qty"] for sym, d in data["positions"].items()}
         return holdings, data["cash_usd"], data
