@@ -4,9 +4,11 @@ IBKR Flex Query API — 포지션/현금/체결 조회 (읽기 전용).
 두 단계: SendRequest → GetStatement (XML 파싱).
 환경변수: IBKR_FLEX_TOKEN, IBKR_FLEX_QUERY_ID
 """
+import json
 import os
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import requests
 
@@ -14,6 +16,27 @@ _SEND_URL = "https://ndcdyn.interactivebrokers.com/Universal/servlet/FlexStateme
 _GET_URL  = "https://ndcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.GetStatement"
 
 _FLEX_EXC = (requests.RequestException, ET.ParseError, RuntimeError, ValueError)
+
+# get_account_data() 결과 파일 캐시 — 호출자가 신경 쓰지 않아도 모든 호출이
+# 자동으로 보호됨. IBKR Flex는 statement 재생성 빈도에 제한이 있어, 짧은
+# 주기로 반복 호출(예: 매분 폴링)하면 1001 에러가 난다.
+_CACHE_FILE     = Path(__file__).parent / ".ibkr_cache.json"
+_CACHE_TTL_SEC  = 300     # 이 시간 내엔 재조회 없이 캐시 재사용
+_STALE_OK_SEC   = 3600    # 조회 실패 시 이만큼 오래된 캐시까지는 살려서 반환
+
+
+def _load_cache() -> dict | None:
+    try:
+        return json.loads(_CACHE_FILE.read_text())
+    except Exception:
+        return None
+
+
+def _save_cache(data: dict):
+    try:
+        _CACHE_FILE.write_text(json.dumps({"ts": time.time(), "data": data}, ensure_ascii=False))
+    except Exception:
+        pass
 
 
 def _send_request(token: str, query_id: str) -> str:
@@ -161,18 +184,30 @@ def realized_ytd_from_trades(trades: list[dict], year: int | None = None) -> flo
 def get_account_data() -> dict:
     """
     IBKR 계좌 전체 조회. 토큰 미설정/네트워크 오류 시 error 필드에 메시지.
+    호출자와 무관하게 자동으로 짧은 캐시(_CACHE_TTL_SEC)를 거치므로, 어디서
+    얼마나 자주 호출하든 IBKR Flex statement 재생성 빈도 제한에 걸리지 않는다.
+    조회 실패 시에도 _STALE_OK_SEC 이내의 캐시가 있으면 그걸 반환한다.
     Returns: {positions, cash_usd, trades, dividends, error}
     """
+    cache = _load_cache()
+    now = time.time()
+    if cache and now - cache.get("ts", 0) < _CACHE_TTL_SEC:
+        return cache["data"]
+
     try:
         root = ET.fromstring(fetch_flex_xml())
-        return {
+        data = {
             "positions": parse_positions(root),
             "cash_usd":  parse_cash(root),
             "trades":    parse_trades(root),
             "dividends": parse_dividends(root),
             "error":     None,
         }
+        _save_cache(data)
+        return data
     except _FLEX_EXC as e:
+        if cache and now - cache.get("ts", 0) < _STALE_OK_SEC:
+            return cache["data"]
         return {
             "error":     str(e),
             "positions": {},
@@ -182,29 +217,13 @@ def get_account_data() -> dict:
         }
 
 
-
-def resolve_holdings_and_cash(config, state: dict | None = None, ttl: int = 600) -> tuple[dict, float, dict]:
+def resolve_holdings_and_cash(config) -> tuple[dict, float, dict]:
     """
     IBKR 실계좌 우선, 실패 시 config 폴백.
-    state를 넘기면 ttl초간 결과를 캐싱(state["_ibkr_cache"]) — bot_once.py처럼
-    매분 호출되는 곳에서 매번 Flex statement를 새로 생성시키면 IBKR 쪽 생성
-    빈도 제한에 걸려 1001 에러가 나므로, 짧은 주기 호출은 캐시를 재사용한다.
     Returns: (holdings, idle_cash, ibkr_data)
     ibkr_data["error"]가 None이면 IBKR 사용 중 → 호출자가 추가 섹션 빌드 가능.
     """
-    if state is None:
-        data = get_account_data()
-    else:
-        cache = state.get("_ibkr_cache")
-        now = time.time()
-        if cache and now - cache.get("ts", 0) < ttl:
-            data = cache["data"]
-        else:
-            data = get_account_data()
-            if data["error"] is None:
-                state["_ibkr_cache"] = {"ts": now, "data": data}
-            elif cache:
-                data = cache["data"]
+    data = get_account_data()
     if data["error"] is None and data["positions"]:
         holdings = {sym: d["qty"] for sym, d in data["positions"].items()}
         return holdings, data["cash_usd"], data
