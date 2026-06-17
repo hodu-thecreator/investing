@@ -89,7 +89,8 @@ class Config:
     RESERVOIR_WATCH: list[str] = ["QQQM", "SPYM", "SPMO", "SOXQ", "GLDM", "IBIT"]
 
     # ── 개별주 워치리스트 — 정보용 (이 계좌는 매수 안 함, 헌법 4조 그대로) ──
-    INDIVIDUAL_WATCHLIST: list[str] = ["NVDA", "TSLA", "AEHR"]
+    # 아내가 별도 계좌에서 실제로 보유 중인 개별주 — 저수지 구간으로 매수 타이밍만 안내
+    INDIVIDUAL_WATCHLIST: list[str] = ["SPCX", "NVDA", "GOOG", "AEHR", "TSLA", "MU"]
 
     # ── 코어 과열 부분 익절 (헌법 7조 예외, 2026.6 신설) ─────────
     # "많이 오르고 현금이 필요하면 판다" — RSI 과열 + 현금 부족 + S&P ATH 근처일 때만
