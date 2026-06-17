@@ -595,14 +595,14 @@ def main():
         print(f"getUpdates 실패: {e}")
 
     # ── 장중 급락 알림 (미국장 시간 + 10분 throttle 내부에서 처리) ──
-    # IBKR 조회는 미국장 시간에만, 그것도 state 캐시(10분)로 — 매분 폴링이
-    # 매번 Flex statement를 재생성시키면 IBKR 쪽 생성 빈도 제한(1001 에러) 유발.
+    # IBKR 조회는 미국장 시간에만 — get_account_data() 내부 캐시가 빈도
+    # 제한을 막아주지만, 장 마감 후엔 어차피 쓸 데가 없으니 호출 자체를 건너뜀.
     holdings = None
     idle_cash = 0.0
     try:
         import intraday_alert
         if intraday_alert._is_market_hours():
-            holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config, state)
+            holdings, idle_cash, _ = ibkr_flex.resolve_holdings_and_cash(_config)
         if intraday_alert.check_and_alert(state, holdings or {}, idle_cash):
             print(f"[{datetime.now():%H:%M:%S}] 장중 급락 알림 발송")
     except Exception as e:
