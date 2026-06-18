@@ -25,16 +25,44 @@ def _api(method: str, **kwargs) -> dict:
     return r.json()
 
 
+def _split_chunks(text: str, limit: int = 4000) -> list[str]:
+    """텔레그램 4096자 제한 대응 — 줄 단위로 안전하게 분할.
+
+    글자 수로 무작정 자르면 <a href>·<b> 같은 HTML 태그 한가운데가 잘려
+    parse_mode=HTML 전송이 400 에러로 통째 실패함. 줄 경계(\n)에서만 잘라
+    각 조각의 태그가 항상 닫혀 있도록 보장한다.
+    """
+    chunks: list[str] = []
+    cur = ""
+    for line in text.split("\n"):
+        # 한 줄 자체가 limit을 넘는 비정상 케이스 — 최후 수단으로 강제 분할
+        if len(line) > limit:
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            for i in range(0, len(line), limit):
+                chunks.append(line[i:i+limit])
+            continue
+        candidate = f"{cur}\n{line}" if cur else line
+        if len(candidate) > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur = candidate
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def send_message(text: str, chat_id: str = "") -> bool:
-    """마크다운 형식으로 텔레그램 메시지 전송"""
+    """HTML 형식으로 텔레그램 메시지 전송 (4096자 초과 시 줄 단위 분할)."""
     cid = chat_id or TELEGRAM_CHAT_ID
     if not TELEGRAM_BOT_TOKEN or not cid:
         print("[Telegram] BOT_TOKEN 또는 CHAT_ID 미설정 — .env 파일을 확인하세요.")
         return False
-    try:
-        # 4096자 초과 시 분할 전송
-        chunks = [text[i:i+4000] for i in range(0, len(text), 4000)]
-        for chunk in chunks:
+    ok = True
+    for chunk in _split_chunks(text):
+        try:
             _api(
                 "sendMessage",
                 chat_id=cid,
@@ -42,10 +70,18 @@ def send_message(text: str, chat_id: str = "") -> bool:
                 parse_mode="HTML",
                 disable_web_page_preview=True,
             )
-        return True
-    except Exception as e:
-        print(f"[Telegram] 전송 실패: {e}")
-        return False
+        except Exception as e:
+            # HTML 파싱 실패(400 등) — 해당 조각만 태그 제거 후 평문으로 재전송
+            print(f"[Telegram] HTML 전송 실패, 평문 재시도: {e}")
+            try:
+                import re
+                plain = re.sub(r"<[^>]+>", "", chunk)
+                _api("sendMessage", chat_id=cid, text=plain,
+                     disable_web_page_preview=True)
+            except Exception as e2:
+                print(f"[Telegram] 평문 재시도도 실패: {e2}")
+                ok = False
+    return ok
 
 
 def get_my_chat_id() -> None:
