@@ -4,7 +4,8 @@ on:
   schedule:
     # 미국 장 시간(EDT 9-17 ET, EST 8-16 ET 모두 커버) 30분마다
     # 13:00~21:00 UTC = EDT 9:00~17:00 / EST 8:00~16:00
-    - cron: "*/30 13-21 * * 1-5"
+    # 정각/30분 정각은 GitHub Actions 스케줄러가 가장 혼잡해 지연이 잘 남 — 분 오프셋으로 회피
+    - cron: "7,37 13-21 * * 1-5"
   workflow_dispatch:
 
 jobs:

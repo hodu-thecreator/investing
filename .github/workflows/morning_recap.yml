@@ -2,9 +2,10 @@ name: Morning Recap
 
 on:
   schedule:
-    # 매일 23:00 UTC = 한국시간 다음날 08:00 KST
+    # 매일 23:07 UTC = 한국시간 다음날 08:07 KST
     # Mon-Fri 23 UTC = Tue-Sat 08:00 KST (미국 화~금 + 토 아침)
-    - cron: "0 23 * * 1-5"
+    # 정각(:00)은 GitHub Actions 스케줄러가 가장 혼잡해 지연이 잘 남 — 분 오프셋으로 회피
+    - cron: "7 23 * * 1-5"
   workflow_dispatch:
 
 jobs:
