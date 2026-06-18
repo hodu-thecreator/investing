@@ -2,8 +2,9 @@ name: Daily Investment Report
 
 on:
   schedule:
-    # 14:00 UTC = 10:00 EDT (여름) / 9:00 EST (겨울, 장 오픈 30분 전)
-    - cron: "0 14 * * 1-5"
+    # 14:07 UTC = 10:07 EDT (여름) / 9:07 EST (겨울, 장 오픈 30분 전)
+    # 정각(:00)은 GitHub Actions 스케줄러가 가장 혼잡해 지연이 잘 남 — 분 오프셋으로 회피
+    - cron: "7 14 * * 1-5"
   workflow_dispatch:
 
 permissions:

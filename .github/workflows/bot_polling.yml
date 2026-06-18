@@ -25,29 +25,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Restore bot state (last processed update_id)
+      - name: Restore bot/transactions/IBKR cache
         uses: actions/cache@v4
         with:
-          path: .bot_state.json
-          key: bot-state-${{ github.run_id }}
+          path: |
+            .bot_state.json
+            .transactions.json
+            .ibkr_cache.json
+          key: bot-cache-${{ github.run_id }}
           restore-keys: |
-            bot-state-
-
-      - name: Restore transactions log
-        uses: actions/cache@v4
-        with:
-          path: .transactions.json
-          key: transactions-${{ github.run_id }}
-          restore-keys: |
-            transactions-
-
-      - name: Restore IBKR Flex cache
-        uses: actions/cache@v4
-        with:
-          path: .ibkr_cache.json
-          key: ibkr-cache-${{ github.run_id }}
-          restore-keys: |
-            ibkr-cache-
+            bot-cache-
 
       - name: Handle pending Telegram commands
         env:
@@ -68,23 +55,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python backup.py
 
-      - name: Save bot state
+      - name: Save bot/transactions/IBKR cache
         uses: actions/cache@v4
         if: always()
         with:
-          path: .bot_state.json
-          key: bot-state-${{ github.run_id }}
-
-      - name: Save transactions log
-        uses: actions/cache@v4
-        if: always()
-        with:
-          path: .transactions.json
-          key: transactions-${{ github.run_id }}
-
-      - name: Save IBKR Flex cache
-        uses: actions/cache@v4
-        if: always()
-        with:
-          path: .ibkr_cache.json
-          key: ibkr-cache-${{ github.run_id }}
+          path: |
+            .bot_state.json
+            .transactions.json
+            .ibkr_cache.json
+          key: bot-cache-${{ github.run_id }}
