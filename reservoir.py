@@ -119,25 +119,30 @@ def build_reservoir_section(state: dict | None = None) -> str:
             f"{_satellite_note(lv['ticker'], state)}"
         )
 
-    deepest = levels[0]
+    deepest_idx = levels[0]["zone_idx"]
+    # 가장 깊은 웅덩이가 여러 종목에 동시에 걸려 있으면 탄약을 그 종목들에 나눠 투입
+    tied = [lv for lv in levels if lv["zone_idx"] == deepest_idx]
     idle = (state or {}).get("idle_cash", 0) or 0
     sgov_value = (state or {}).get("ticker_values", {}).get("SGOV", 0) or 0
     available_cash = sgov_value + idle
 
     lines.append("")
-    if deepest["zone_idx"] > 0:
-        fire = zone_fire(deepest["zone_idx"])
+    if deepest_idx > 0:
+        fire = zone_fire(deepest_idx)
         if fire > 0 and available_cash > 0:
-            amount = available_cash * fire
-            lines.append(
-                f"  👉 <b>{deepest['ticker']}</b>  {zone_label(deepest['zone_idx'])} — "
-                f"탄약 ${available_cash:,.0f} 중 {fire*100:.0f}% = <b>${amount:,.0f}</b> 투입"
-            )
+            amount_each = available_cash * fire / len(tied)
+            split_tag = f" ÷ {len(tied)}종목" if len(tied) > 1 else ""
+            for lv in tied:
+                lines.append(
+                    f"  👉 <b>{lv['ticker']}</b>  {zone_label(deepest_idx)} — "
+                    f"탄약 ${available_cash:,.0f} 중 {fire*100:.0f}%{split_tag} = <b>${amount_each:,.0f}</b> 투입"
+                )
         else:
-            lines.append(
-                f"  👉 <b>{deepest['ticker']}</b>  {zone_label(deepest['zone_idx'])} — "
-                f"{zone_action(deepest['zone_idx'])}"
-            )
+            for lv in tied:
+                lines.append(
+                    f"  👉 <b>{lv['ticker']}</b>  {zone_label(deepest_idx)} — "
+                    f"{zone_action(deepest_idx)}"
+                )
         if idle >= _config.IDLE_CASH_ALERT_USD:
             lines.append(f"  💤 노는 돈 <b>${idle:,.0f}</b> — 여기에 먼저 투입")
     else:
@@ -191,6 +196,11 @@ def check_zone_alerts(state: dict, holdings: dict | None = None,
     from intraday_alert import _total_cash
     available_cash = _total_cash(holdings or {}, idle_cash)
 
+    # 같은 단계로 동시에 진입한 종목이 여럿이면 탄약을 그만큼 나눠서 안내
+    same_zone_count: dict[int, int] = {}
+    for lv in entered:
+        same_zone_count[lv["zone_idx"]] = same_zone_count.get(lv["zone_idx"], 0) + 1
+
     now_kst = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%H:%M KST")
     lines = [f"<b>🏞 저수지 진입 알림</b>  {now_kst}", "━" * 28]
     for lv in entered:
@@ -200,8 +210,10 @@ def check_zone_alerts(state: dict, holdings: dict | None = None,
         )
         fire = zone_fire(lv["zone_idx"])
         if fire > 0 and available_cash > 0:
-            amount = available_cash * fire
-            lines.append(f"   → 탄약 ${available_cash:,.0f} 중 {fire*100:.0f}% = ${amount:,.0f} 투입")
+            count = same_zone_count[lv["zone_idx"]]
+            amount = available_cash * fire / count
+            split_tag = f" ÷ {count}종목" if count > 1 else ""
+            lines.append(f"   → 탄약 ${available_cash:,.0f} 중 {fire*100:.0f}%{split_tag} = ${amount:,.0f} 투입")
         else:
             lines.append(f"   → {zone_action(lv['zone_idx'])}")
         note = _satellite_note(lv["ticker"], None)

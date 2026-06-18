@@ -398,10 +398,13 @@ def build_correction_section(holdings: dict[str, float], idle_cash: float,
         if dd <= t["drop"]:
             active = t
 
-    lines = ["<b>🎯 조정 대응 가이드</b>  <i>(S&P500 ATH 기준)</i>"]
+    lines = [
+        "<b>🎯 조정 대응 가이드</b>  "
+        "<i>(시장이 전고점에서 얼마나 빠졌는지에 따라 얼마를·무엇을 살지 안내)</i>"
+    ]
     lines.append(
         f"  S&P500  ${sp['current']:,.2f}  "
-        f"(ATH ${sp['ath']:,.2f} 대비 <b>{dd:+.1f}%</b>)"
+        f"(전고점 ${sp['ath']:,.2f} 대비 <b>{dd:+.1f}%</b>)"
     )
     ammo_str = f"${total_cash:,.0f}"
     if sgov_val > 0 and idle > 0:
@@ -1232,14 +1235,13 @@ def build_leverage_harvest_plan(
 
         if pos and pos.get("mark_price"):
             cur_price = float(pos["mark_price"])
-            cost_per_share = (
-                float(pos["cost_basis"]) / float(pos.get("qty", qty))
-                if pos.get("cost_basis") and pos.get("qty")
-                else None
-            )
+            # cost_basis는 IBKR Flex가 이미 1주당 단가로 제공함 (qty로 다시 나누면 안 됨)
+            cost_per_share = float(pos["cost_basis"]) if pos.get("cost_basis") else None
             if cost_per_share and cost_per_share > 0:
                 gain_pct = (cur_price - cost_per_share) / cost_per_share * 100
-                unrealized = (cur_price - cost_per_share) * qty
+                unrealized = pos.get("unrealized_pnl")
+                if unrealized is None:
+                    unrealized = (cur_price - cost_per_share) * qty
 
         if cur_price is None:
             tx = tx_summary.get(t, {})
@@ -1263,6 +1265,15 @@ def build_leverage_harvest_plan(
         if gain_pct is not None and gain_pct < 15:
             continue  # 수익 부족 — 익절 효과 미미
 
+        # RSI — 과열 신호 없이 수익률만으로 익절을 권하면 상승 모멘텀을 너무 일찍 끊을 수 있음
+        rsi = None
+        try:
+            rsi_df = fetch_stock_data(t, period="6mo")
+            if not rsi_df.empty:
+                rsi = calc_rsi(rsi_df)
+        except Exception:
+            pass
+
         candidates.append({
             "ticker": t,
             "qty": qty,
@@ -1271,6 +1282,7 @@ def build_leverage_harvest_plan(
             "gain_pct": gain_pct,
             "unrealized": unrealized,
             "bucket": _config.LEVERAGE_BUCKET[t],
+            "rsi": rsi,
         })
 
     if not candidates:
@@ -1280,8 +1292,12 @@ def build_leverage_harvest_plan(
 
     lines = ["<b>🔋 레버리지 익절 → 탄약 재장전</b>  <i>(월 납입 대체)</i>"]
     lines.append(
-        f"  S&P500  ATH 대비 <b>{dd:+.1f}%</b>  "
-        f"← 레버리지 고점 익절 타이밍"
+        "  <i>현금(SGOV)이 목표치보다 부족한데, 보유한 레버리지 ETF가 많이 올라있어 "
+        "일부만 팔아 현금을 채우자는 제안입니다.</i>"
+    )
+    lines.append(
+        f"  S&P500  전고점 대비 <b>{dd:+.1f}%</b>  "
+        f"← 시장이 고점 근처라 레버리지도 익절하기 좋은 시점"
     )
     cash_ratio = cash_value / total_portfolio
     lines.append(
@@ -1330,24 +1346,58 @@ def build_leverage_harvest_plan(
 
     # ── MDD 기반 분할 익절 타겟 ──────────────────────────────────
     lines.append("")
-    lines.append("<b>📤 MDD 기반 분할 익절 타겟</b>  <i>(수익 구간별 단계 청산)</i>")
+    lines.append(
+        "<b>📤 수익률 기반 분할 익절 타겟</b>  "
+        "<i>(미리 정해둔 목표 수익률 도달 시 일부 청산 — 참고용 알림)</i>"
+    )
     targets = _config.LEV_HARVEST_TARGETS  # [(30, desc), (50, desc), (100, desc)]
+    any_caution = False
     for gain_tgt, desc in targets:
-        # 현재 해당 구간에 있는 레버리지 ETF 찾기
-        at_zone = [
-            c["ticker"] for c in candidates
-            if c.get("gain_pct") is not None and c["gain_pct"] >= gain_tgt * 0.85  # 85% 도달 시 준비
-        ]
-        marker = "👉" if at_zone else "  "
-        zone_tag = f"  ← <b>{', '.join(at_zone)}</b> 구간 도달" if at_zone else ""
+        # 현재 해당 구간에 있는 레버리지 ETF 찾기 — RSI 과열(≥70) 여부로 긴급도 구분
+        confirmed, caution = [], []
+        for c in candidates:
+            if c.get("gain_pct") is None or c["gain_pct"] < gain_tgt * 0.85:  # 85% 도달 시 준비
+                continue
+            if c.get("rsi") is not None and c["rsi"] < 70:
+                caution.append(c["ticker"])
+            else:
+                confirmed.append(c["ticker"])
+
+        if confirmed:
+            marker, zone_tag = "👉", f"  ← <b>{', '.join(confirmed)}</b> 구간 도달"
+        elif caution:
+            marker, zone_tag = "💡", f"  ← <b>{', '.join(caution)}</b> 구간 도달 (RSI 과열 아님 — 급매 불필요)"
+            any_caution = True
+        else:
+            marker, zone_tag = "  ", ""
         lines.append(f"  {marker} +{gain_tgt}%  {desc}{zone_tag}")
+    if any_caution:
+        lines.append(
+            "  <i>💡 표시는 목표 수익률엔 도달했지만 RSI가 과열 구간이 아닌 경우 — "
+            "상승 모멘텀이 살아있다면 더 들고 가도 됨, 강제 매도 신호 아님.</i>"
+        )
     lines.append(
         "  <i>TQQQ는 단기·중기 반등 전략 — 장기 보유 시 레버리지 비용 누적으로 원금 잠식</i>"
     )
 
     lines.append("")
-    lines.append("  <i>레버리지는 조정 시 임시 포지션 — ATH 근처 익절 가능 (코어 제외).</i>")
+    lines.append("  <i>레버리지는 조정 시 임시 포지션 — 전고점 근처 익절 가능 (코어 제외).</i>")
     return "\n".join(lines)
+
+
+def _watch_action_text(zone_idx: int) -> str:
+    """개별주 워치(아내 별도 계좌)용 액션 한 줄 — '탄약 투입' 표현 대신 매수 비중 가이드.
+
+    이 계좌는 공유 SGOV 탄약 풀이 없으므로 reservoir.zone_action()의
+    "탄약 N% 투입" 문구를 그대로 쓰면 오해를 부름 — 매수 비중 가이드로 재해석.
+    """
+    if zone_idx <= 0:
+        return "평소대로 매수"
+    if zone_idx == 1:
+        return "이번 매수 시점을 앞당기기"
+    import reservoir
+    fire = reservoir.zone_fire(zone_idx)
+    return f"평소보다 {fire*100:.0f}% 더 많이 매수 고려"
 
 
 # ── 리포트 빌더 ──────────────────────────────────────────────────
@@ -1494,9 +1544,21 @@ def build_report() -> str:
         lines.append("\n" + "━" * 28)
         lines.append(accum_report)
 
+    # ── [1-b] 전체 보유 종목 (IBKR 실계좌 — 보유 중인 모든 티커) ──────
+    if _ibkr_ok:
+        try:
+            account_section = ibkr_flex.build_account_section(
+                _ibkr["positions"], _ibkr["cash_usd"]
+            )
+            if account_section:
+                lines.append("\n" + "━" * 28)
+                lines.append(account_section)
+        except Exception as e:
+            print(f"[account_section] {e}")
+
     # ── [2] 코어 5종목 현황 (헌법 5조 — 매도 판단 없음, 보유 전제) ──
     lines.append("\n" + "━" * 28)
-    lines.append("<b>🏦 코어 5종목 현황</b>")
+    lines.append("<b>🏦 코어 5종목 현황</b>  <i>(헌법 5조 — 5종목만)</i>")
     lines.append("")
 
     buy_count = 0
@@ -1528,7 +1590,7 @@ def build_report() -> str:
         elif drawdown <= -2:
             zone = "🟡 소폭 조정"
         else:
-            zone = "⚪ ATH 근처"
+            zone = "⚪ 전고점 근처"
 
         lines.append(
             f"  <b>{ticker}</b>  (목표 {target_pct:.0f}%)  ${price:.2f}  "
@@ -1563,7 +1625,8 @@ def build_report() -> str:
     # 호두가 새 위성을 실제로 매수하면: 알려주고 비중/전략 재설계를 요청하게 안내
     known = (set(_config.CORE_ALLOCATION) | set(_config.SATELLITE_TICKERS)
              | set(_config.LEVERAGE_BUCKET) | LEGACY_TICKERS
-             | set(_config.CASH_TICKERS))
+             | set(_config.CASH_TICKERS)
+             | set(getattr(_config, "EQUIVALENT_TICKERS", {})))
     new_held = [(t, q) for t, q in holdings.items()
                 if q and q > 0.01 and t not in known]
     if new_held:
@@ -1594,8 +1657,8 @@ def build_report() -> str:
                     mark = "🔴" if rsi >= 70 else ("🟢" if rsi <= 30 else "")
                     rsi_tag = f"  RSI {rsi}{mark}"
                 idx, zone = reservoir.classify(drawdown if drawdown is not None else 0)
-                zone_tag = f"  → {reservoir.zone_label(idx)}" if zone else ""
-                lines.append(f"  <b>{t}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{zone_tag}")
+                action_tag = f"  → {reservoir.zone_label(idx)} · {_watch_action_text(idx)}" if zone else ""
+                lines.append(f"  <b>{t}</b>  ${price:.2f}  ({drawdown:+.1f}%){rsi_tag}{action_tag}")
         except Exception as e:
             print(f"[watchlist] {e}")
 

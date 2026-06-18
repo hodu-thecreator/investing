@@ -103,12 +103,15 @@ def calc_portfolio_state(
     if total <= 0:
         return {"total": 0, "categories": {}, "ticker_values": {}, "unclassified": {}}
 
+    equiv = getattr(_config, "EQUIVALENT_TICKERS", {})  # 예: {"SCHG": "Nasdaq100"}
+
     categories: dict[str, dict] = {}
     used = set()
     for cat, conf in TARGET_ALLOCATION.items():
         cat_value = idle_cash if cat == "현금" else 0
         breakdown = []
-        for t in conf["tickers"]:
+        cat_tickers = list(conf["tickers"]) + [t for t, c in equiv.items() if c == cat]
+        for t in cat_tickers:
             v = ticker_values.get(t, 0)
             if v > 0:
                 breakdown.append((t, v, v / total * 100))

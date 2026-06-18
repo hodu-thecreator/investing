@@ -264,7 +264,7 @@ class TestDecideAction(unittest.TestCase):
         from intraday_alert import _decide_action
         headline, detail = _decide_action(None, {}, 0)
         self.assertIsNone(headline)
-        self.assertIn("ATH", detail)
+        self.assertIn("전고점", detail)
 
     def test_no_active_trigger_returns_no_headline(self):
         from intraday_alert import _decide_action

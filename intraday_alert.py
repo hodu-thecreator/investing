@@ -96,7 +96,7 @@ def _decide_action(ath: dict | None, holdings: dict, idle_cash: float) -> tuple[
     headline이 None이면 지금 발사할 트리거 없음 — 호출부는 헤드라인 없이 detail만 표시하거나 생략.
     """
     if ath is None:
-        return None, "ATH 데이터 조회 실패 — /report 로 확인"
+        return None, "전고점 데이터 조회 실패 — /report 로 확인"
 
     dd = ath["drawdown"]
     active = ath["active"]
@@ -106,7 +106,7 @@ def _decide_action(ath: dict | None, holdings: dict, idle_cash: float) -> tuple[
         gap = dd - nxt["drop"]
         return (
             None,
-            f"ATH 대비 {dd:+.1f}%  ·  다음 트리거({nxt['drop']}%)까지 {gap:.1f}%p 남음",
+            f"전고점 대비 {dd:+.1f}%  ·  다음 트리거({nxt['drop']}%)까지 {gap:.1f}%p 남음",
         )
 
     from config import Config
@@ -117,14 +117,14 @@ def _decide_action(ath: dict | None, holdings: dict, idle_cash: float) -> tuple[
         usable = max(0.0, total_cash - Config.EMERGENCY_FUND_USD)
         return (
             f"비상금 외 전액 ${usable:,.0f} 발사 → QQQM/SPYM 50:50 매수",
-            f"ATH 대비 {dd:+.1f}%  ·  -30% 트리거 도달 (역대급 구간)",
+            f"전고점 대비 {dd:+.1f}%  ·  -30% 트리거 도달 (역대급 구간)",
         )
 
     fire_amt = total_cash * active["fire"]
     core_each = fire_amt / 2
     headline = f"QQQM ${core_each:,.0f} + SPYM ${core_each:,.0f} 매수"
     detail = (
-        f"ATH 대비 {dd:+.1f}%  ·  {active['drop']}% 트리거 도달 "
+        f"전고점 대비 {dd:+.1f}%  ·  {active['drop']}% 트리거 도달 "
         f"→ SGOV 탄약 {active['fire']*100:.0f}%(${fire_amt:,.0f}) 발사"
     )
     if active["lev"]:
