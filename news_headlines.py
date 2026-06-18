@@ -11,8 +11,8 @@ import yfinance as yf
 
 
 def _parse_news_item(item: dict) -> dict | None:
-    """yfinance news 아이템(구/신 포맷 모두) → {title, ts, age_h} 정규화."""
-    # 신 포맷: {'content': {'title': ..., 'pubDate': '2024-01-01T...Z', ...}}
+    """yfinance news 아이템(구/신 포맷 모두) → {title, url, ts, age_h} 정규화."""
+    # 신 포맷: {'content': {'title': ..., 'pubDate': '2024-01-01T...Z', 'canonicalUrl': {'url': ...}, ...}}
     content = item.get("content") if isinstance(item, dict) else None
     if isinstance(content, dict):
         title = content.get("title") or ""
@@ -25,10 +25,15 @@ def _parse_news_item(item: dict) -> dict | None:
                 ts = None
         if not ts:
             return None
+        url = (
+            (content.get("canonicalUrl") or {}).get("url")
+            or (content.get("clickThroughUrl") or {}).get("url")
+            or ""
+        )
         age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-        return {"title": title.strip(), "ts": ts, "age_h": age_h}
+        return {"title": title.strip(), "url": url, "ts": ts, "age_h": age_h}
 
-    # 구 포맷: {'title': ..., 'providerPublishTime': 1234567890, ...}
+    # 구 포맷: {'title': ..., 'link': 'https://...', 'providerPublishTime': 1234567890, ...}
     title = (item.get("title") or "").strip()
     pt = item.get("providerPublishTime")
     if not title or not pt:
@@ -38,7 +43,7 @@ def _parse_news_item(item: dict) -> dict | None:
     except Exception:
         return None
     age_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-    return {"title": title, "ts": ts, "age_h": age_h}
+    return {"title": title, "url": item.get("link") or "", "ts": ts, "age_h": age_h}
 
 
 def fetch_recent_news(ticker: str, max_age_hours: int = 48) -> dict | None:
@@ -69,8 +74,12 @@ def _truncate(text: str, max_len: int = 60) -> str:
     return text if len(text) <= max_len else text[: max_len - 1] + "…"
 
 
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def build_news_section(holdings: dict, top_n: int = 3, max_age_hours: int = 48) -> str:
-    """보유 비중 상위 N개 종목의 최신 뉴스 1건씩."""
+    """보유 비중 상위 N개 종목의 최신 뉴스 1건씩 (클릭 가능한 링크 포함)."""
     if not holdings:
         return ""
     # 포지션 큰 순서 (qty 기준 — 가격 곱하기까진 과도)
@@ -88,8 +97,10 @@ def build_news_section(holdings: dict, top_n: int = 3, max_age_hours: int = 48) 
         if not news:
             continue
         age = _format_age(news["age_h"])
-        title = _truncate(news["title"], 55)
-        lines.append(f"  <b>{ticker}</b>  {title}  <i>({age})</i>")
+        title = _escape_html(_truncate(news["title"], 55))
+        url = news.get("url")
+        title_html = f'<a href="{_escape_html(url)}">{title}</a>' if url else title
+        lines.append(f"  <b>{ticker}</b>  {title_html}  <i>({age})</i>")
         found += 1
 
     if found == 0:
