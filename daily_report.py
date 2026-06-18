@@ -22,6 +22,7 @@ from market_indicators import collect_all, get_nzd_krw_cross, format_change_chip
 from telegram_notifier import send_message
 from config import Config
 from events import build_calendar_section, get_dividend_schedule
+from news_headlines import build_news_section
 from rebalancing import check_drifts, calc_portfolio_state
 import ibkr_flex
 
@@ -1662,6 +1663,15 @@ def build_report() -> str:
     if cal_section:
         lines.append("\n" + "━" * 28)
         lines.append(cal_section)
+
+    # ── [6.5] 보유 종목 뉴스 헤드라인 (클릭 가능한 링크 포함) ──────
+    try:
+        news_section = build_news_section(holdings, top_n=3, max_age_hours=48)
+        if news_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(news_section)
+    except Exception as e:
+        print(f"[news] {e}")
 
     # ── [7] 리밸런싱 알림 (드리프트 ±5%p 초과 시만) ──────────────
     drifts: list = []
