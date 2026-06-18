@@ -92,6 +92,10 @@ class Config:
     # 아내가 별도 계좌에서 실제로 보유 중인 개별주 — 저수지 구간으로 매수 타이밍만 안내
     INDIVIDUAL_WATCHLIST: list[str] = ["SPCX", "NVDA", "GOOG", "AEHR", "TSLA", "MU"]
 
+    # ── 동등 분류 — 카테고리에 없는 티커를 기존 카테고리로 편입 ──────
+    # 예: SCHG(나스닥100 추종 ETF)는 QQQM과 같은 노출이므로 별도 "신규 종목"이 아님.
+    EQUIVALENT_TICKERS: dict[str, str] = {"SCHG": "Nasdaq100"}
+
     # ── 코어 과열 부분 익절 (헌법 7조 예외, 2026.6 신설) ─────────
     # "많이 오르고 현금이 필요하면 판다" — RSI 과열 + 현금 부족 + S&P ATH 근처일 때만
     CORE_TRIM_RSI = 70           # 이 RSI 이상이면 과열
