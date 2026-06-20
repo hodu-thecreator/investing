@@ -36,14 +36,14 @@ def _is_market_hours() -> bool:
 def _intraday_change(ticker: str) -> tuple[float | None, float | None]:
     try:
         t = yf.Ticker(ticker)
-        daily = t.history(period="2d", interval="1d")
-        if len(daily) < 2:
+        daily_close = t.history(period="2d", interval="1d")["Close"].dropna()
+        if len(daily_close) < 2:
             return None, None
-        prev_close = float(daily["Close"].iloc[-2])
-        intraday = t.history(period="1d", interval="5m")
-        if intraday.empty:
+        prev_close = float(daily_close.iloc[-2])
+        intraday_close = t.history(period="1d", interval="5m")["Close"].dropna()
+        if intraday_close.empty:
             return None, None
-        current = float(intraday["Close"].iloc[-1])
+        current = float(intraday_close.iloc[-1])
         return current, (current - prev_close) / prev_close * 100
     except Exception:
         return None, None
@@ -62,7 +62,9 @@ def _ath_trigger_status() -> dict | None:
         df = yf.Ticker("SPY").history(period="5y")
         if df.empty:
             return None
-        close = df["Close"]
+        close = df["Close"].dropna()
+        if close.empty:
+            return None
         current = float(close.iloc[-1])
         ath = float(close.max())
         dd = (current - ath) / ath * 100 if ath else 0.0

@@ -61,9 +61,10 @@ def get_vix() -> dict:
     for attempt in range(3):
         try:
             hist = yf.Ticker("^VIX").history(period="5d")
-            if hist is not None and not hist.empty:
-                current = float(hist["Close"].iloc[-1])
-                prev = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else current
+            close = hist["Close"].dropna() if hist is not None else None
+            if close is not None and not close.empty:
+                current = float(close.iloc[-1])
+                prev = float(close.iloc[-2]) if len(close) >= 2 else current
                 change = round(current - prev, 2)
                 if current >= 40:
                     level = "극공포 🔥 적극 매수 구간"
@@ -89,8 +90,9 @@ def get_put_call_ratio() -> dict:
     for attempt in range(3):
         try:
             hist = yf.Ticker("^PCCE").history(period="5d")
-            if hist is not None and not hist.empty:
-                current = round(float(hist["Close"].iloc[-1]), 3)
+            close = hist["Close"].dropna() if hist is not None else None
+            if close is not None and not close.empty:
+                current = round(float(close.iloc[-1]), 3)
                 level = (
                     "극도 공포 (매수 신호)" if current >= 1.0
                     else "공포" if current >= 0.8
@@ -164,7 +166,9 @@ def get_market_breadth() -> dict:
             df = yf.Ticker(sym).history(period="1y")
             if df.empty:
                 continue
-            close = df["Close"].squeeze()
+            close = df["Close"].squeeze().dropna()
+            if close.empty:
+                continue
             price = float(close.iloc[-1])
             if len(close) >= 50:
                 ma50 = float(close.rolling(50).mean().iloc[-1])
@@ -246,9 +250,10 @@ def get_usd_krw() -> dict:
         }
     try:
         df = yf.Ticker("USDKRW=X").history(period="10d")
-        if df is not None and not df.empty:
-            current = float(df["Close"].iloc[-1])
-            week_ago = float(df["Close"].iloc[0]) if len(df) >= 5 else None
+        close = df["Close"].dropna() if df is not None else None
+        if close is not None and not close.empty:
+            current = float(close.iloc[-1])
+            week_ago = float(close.iloc[0]) if len(close) >= 5 else None
             change_pct = (current - week_ago) / week_ago * 100 if week_ago else None
             return {
                 "usd_to_krw": round(current, 2),

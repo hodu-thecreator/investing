@@ -142,7 +142,9 @@ def check_triggers() -> tuple[list[str], dict]:
             df = fetch_stock_data(etf, period="3mo")
             if df.empty:
                 continue
-            close = df["Close"].squeeze()
+            close = df["Close"].squeeze().dropna()
+            if close.empty:
+                continue
             current = float(close.iloc[-1])
             high_60d = float(close.rolling(min(60, len(close))).max().iloc[-1])
             dd = (current - high_60d) / high_60d * 100

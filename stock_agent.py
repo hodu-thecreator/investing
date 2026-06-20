@@ -32,7 +32,9 @@ def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
     """yfinance로 주가 데이터 가져오기"""
     try:
         df = yf.Ticker(ticker).history(period=period)
-        return df if df is not None else pd.DataFrame()
+        if df is None:
+            return pd.DataFrame()
+        return df.dropna(subset=["Close"])
     except Exception:
         return pd.DataFrame()
 
