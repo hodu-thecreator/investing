@@ -65,7 +65,9 @@ def _price(ticker: str) -> float | None:
     try:
         df = yf.Ticker(ticker).history(period="2d")
         if df is not None and not df.empty:
-            return float(df["Close"].iloc[-1])
+            close = df["Close"].dropna()
+            if not close.empty:
+                return float(close.iloc[-1])
     except Exception:
         pass
     return None

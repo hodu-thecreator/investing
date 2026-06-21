@@ -33,9 +33,11 @@ def daily_change(ticker: str) -> dict | None:
     """전일 종가 대비 변동."""
     try:
         df = yf.Ticker(ticker).history(period="5d")
-        if df is None or df.empty or len(df) < 2:
+        if df is None or df.empty:
             return None
-        close = df["Close"].squeeze()
+        close = df["Close"].squeeze().dropna()
+        if len(close) < 2:
+            return None
         cur = float(close.iloc[-1])
         prev = float(close.iloc[-2])
         pct = (cur - prev) / prev * 100

@@ -263,9 +263,11 @@ def _five_day_return(ticker: str) -> float | None:
     """최근 5거래일 수익률(%). 실패 시 None."""
     try:
         df = yf.Ticker(ticker).history(period="10d")
-        if df is None or df.empty or len(df) < 2:
+        if df is None or df.empty:
             return None
-        close = df["Close"].squeeze()
+        close = df["Close"].squeeze().dropna()
+        if len(close) < 2:
+            return None
         cur = float(close.iloc[-1])
         prev = float(close.iloc[max(0, len(close) - 6)])
         return (cur - prev) / prev * 100

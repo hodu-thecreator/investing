@@ -26,9 +26,11 @@ _config = Config()
 
 def _spy_period_return(hist, days: int) -> float | None:
     """SPY 히스토리에서 days 거래일 전 대비 수익률(%)."""
-    if hist is None or hist.empty or len(hist) < 2:
+    if hist is None or hist.empty:
         return None
-    close = hist["Close"].squeeze()
+    close = hist["Close"].squeeze().dropna()
+    if len(close) < 2:
+        return None
     current = float(close.iloc[-1])
     idx = max(0, len(close) - days - 1)
     past = float(close.iloc[idx])
@@ -52,13 +54,13 @@ def build_vs_spy_section(positions: dict) -> str:
     spy_ytd_label = f"SPY 1Y {spy_ytd:+.1f}%" if spy_ytd is not None else ""
 
     # YTD: 올해 첫 거래일 기준
-    if spy_hist is not None and not spy_hist.empty:
-        close = spy_hist["Close"].squeeze()
+    spy_close = spy_hist["Close"].squeeze().dropna() if spy_hist is not None else None
+    if spy_close is not None and not spy_close.empty:
         year_start_idx = next(
-            (i for i, d in enumerate(spy_hist.index) if d.year == datetime.now().year),
+            (i for i, d in enumerate(spy_close.index) if d.year == datetime.now().year),
             0,
         )
-        spy_ytd_val = (float(close.iloc[-1]) - float(close.iloc[year_start_idx])) / float(close.iloc[year_start_idx]) * 100
+        spy_ytd_val = (float(spy_close.iloc[-1]) - float(spy_close.iloc[year_start_idx])) / float(spy_close.iloc[year_start_idx]) * 100
     else:
         spy_ytd_val = None
 
@@ -106,9 +108,11 @@ def weekly_return(ticker: str) -> dict | None:
     """5거래일 수익률 (1주일 ≈ 5거래일)."""
     try:
         df = yf.Ticker(ticker).history(period="10d")
-        if df is None or df.empty or len(df) < 2:
+        if df is None or df.empty:
             return None
-        close = df["Close"].squeeze()
+        close = df["Close"].squeeze().dropna()
+        if len(close) < 2:
+            return None
         current = float(close.iloc[-1])
         # 5거래일 전 종가 (없으면 가장 오래된 것)
         idx = -6 if len(close) >= 6 else 0

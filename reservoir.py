@@ -67,7 +67,9 @@ def fetch_levels(tickers: list[str] | None = None) -> list[dict]:
             df = yf.Ticker(t).history(period="1y")
             if df is None or df.empty:
                 continue
-            close = df["Close"]
+            close = df["Close"].dropna()
+            if close.empty:
+                continue
             price = float(close.iloc[-1])
             high = float(close.max())
             dd = (price - high) / high * 100 if high else 0.0

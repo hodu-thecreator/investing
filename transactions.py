@@ -123,7 +123,10 @@ def _current_price(ticker: str) -> float | None:
         df = yf.Ticker(ticker).history(period="5d")
         if df.empty:
             return None
-        return float(df["Close"].iloc[-1])
+        close = df["Close"].dropna()
+        if close.empty:
+            return None
+        return float(close.iloc[-1])
     except Exception:
         return None
 

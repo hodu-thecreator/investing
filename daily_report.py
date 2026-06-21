@@ -38,11 +38,15 @@ MA_PERIODS = [50, 200]
 
 
 def fetch_stock_data(ticker: str, period: str = "1y") -> pd.DataFrame:
+    """야후 파이낸스 최신 봉이 아직 확정 전이라 Close가 NaN으로 오는 경우가 있음 —
+    그대로 두면 NaN 비교가 항상 False가 되어 '문제 없음'으로 오인되므로 제거."""
     for attempt in range(3):
         try:
             df = yf.Ticker(ticker).history(period=period)
             if df is not None and not df.empty:
-                return df
+                df = df.dropna(subset=["Close"])
+                if not df.empty:
+                    return df
         except Exception as e:
             print(f"[fetch_stock_data] {ticker} attempt {attempt+1}: {e}")
         if attempt < 2:
