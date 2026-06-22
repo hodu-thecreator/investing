@@ -5,8 +5,10 @@ Daily Report — 종합 판단 버전
 """
 
 import re
+import json
 import argparse
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
@@ -1881,16 +1883,41 @@ def build_report() -> str:
 
 # ── 실행 ─────────────────────────────────────────────────────────
 
+# 외부 cron(workflow_dispatch)과 GitHub 자체 schedule이 같은 날 둘 다 발화해도
+# 중복 발송되지 않도록 "오늘 이미 보냈는지"를 파일로 기록.
+REPORT_STATE_FILE = Path(__file__).parent / "data" / "report_state.json"
+
+
+def _load_report_state() -> dict:
+    try:
+        return json.loads(REPORT_STATE_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _mark_report_sent(today: str):
+    state = _load_report_state()
+    state["daily_report_sent"] = today
+    REPORT_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+
+
 def should_skip_run() -> tuple[bool, str]:
     if os.getenv("FORCE_SEND") == "1":
         return False, "FORCE_SEND=1 (수동 실행)"
     now_et = datetime.now(ZoneInfo("America/New_York"))
     if now_et.weekday() >= 5:
         return True, f"주말 ({now_et:%a %H:%M ET})"
+    today = now_et.strftime("%Y-%m-%d")
+    if _load_report_state().get("daily_report_sent") == today:
+        return True, f"오늘({today}) 이미 발송됨 — 중복 방지"
     return False, f"실행 ({now_et:%H:%M ET})"
 
 
 def run_once(test_mode: bool = False):
+    # FORCE_SEND로 강제 발송된 경우는 디듀프 기록을 남기지 않음 — 수동 테스트가
+    # 그날의 "발송 슬롯"을 먹어버려 정작 장 오픈 시간대 정식 발송이 스킵되는 걸 방지.
+    forced = os.getenv("FORCE_SEND") == "1"
     if not test_mode:
         skip, reason = should_skip_run()
         if skip:
@@ -1906,6 +1933,8 @@ def run_once(test_mode: bool = False):
     else:
         ok = send_message(report)
         print(f"[{datetime.now():%H:%M:%S}] 텔레그램 전송 {'✅ 성공' if ok else '❌ 실패'}")
+        if ok and not forced:
+            _mark_report_sent(datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"))
 
 
 if __name__ == "__main__":
