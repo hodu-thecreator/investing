@@ -1915,6 +1915,9 @@ def should_skip_run() -> tuple[bool, str]:
 
 
 def run_once(test_mode: bool = False):
+    # FORCE_SEND로 강제 발송된 경우는 디듀프 기록을 남기지 않음 — 수동 테스트가
+    # 그날의 "발송 슬롯"을 먹어버려 정작 장 오픈 시간대 정식 발송이 스킵되는 걸 방지.
+    forced = os.getenv("FORCE_SEND") == "1"
     if not test_mode:
         skip, reason = should_skip_run()
         if skip:
@@ -1930,7 +1933,7 @@ def run_once(test_mode: bool = False):
     else:
         ok = send_message(report)
         print(f"[{datetime.now():%H:%M:%S}] 텔레그램 전송 {'✅ 성공' if ok else '❌ 실패'}")
-        if ok:
+        if ok and not forced:
             _mark_report_sent(datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"))
 
 
