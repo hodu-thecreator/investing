@@ -3,9 +3,15 @@ name: Daily Investment Report
 on:
   schedule:
     # 14:07 UTC = 10:07 EDT (여름) / 9:07 EST (겨울, 장 오픈 30분 전)
-    # 정각(:00)은 GitHub Actions 스케줄러가 가장 혼잡해 지연이 잘 남 — 분 오프셋으로 회피
+    # GitHub 자체 스케줄러는 지연/드랍이 잦아 외부 cron(workflow_dispatch 직접 호출)을
+    # 주 트리거로 쓰고, 이 schedule은 외부 cron이 죽었을 때를 위한 백업으로만 둔다.
     - cron: "7 14 * * 1-5"
   workflow_dispatch:
+    inputs:
+      force:
+        description: "주말/중복 발송 체크 무시하고 강제 발송 (수동 테스트용 — 외부 cron은 false로 호출)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -38,15 +44,15 @@ jobs:
           WATCH_STOCKS: ${{ secrets.WATCH_STOCKS }}
           IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
           IBKR_FLEX_QUERY_ID: ${{ secrets.IBKR_FLEX_QUERY_ID }}
-          FORCE_SEND: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          FORCE_SEND: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.force != 'false') && '1' || '0' }}
         run: python daily_report.py
 
       - name: Commit data snapshots
         run: |
-          if ! git diff --quiet -- data/asset_history.json data/dividend_state.json; then
+          if ! git diff --quiet -- data/asset_history.json data/dividend_state.json data/report_state.json; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add data/asset_history.json data/dividend_state.json
-            git commit -m "chore: 자산 추이/배당 입금 상태 갱신 ($(date +%Y-%m-%d))"
+            git add data/asset_history.json data/dividend_state.json data/report_state.json
+            git commit -m "chore: 자산 추이/배당 입금/발송 상태 갱신 ($(date +%Y-%m-%d))"
             git push origin HEAD:main
           fi
