@@ -12,9 +12,19 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # 외부 의존성 스텁 (오프라인 실행용)
-for mod in ("yfinance", "requests", "pandas"):
+for mod in ("yfinance", "pandas", "bs4"):
     sys.modules.setdefault(mod, types.ModuleType(mod))
+sys.modules["bs4"].BeautifulSoup = object
+sys.modules["pandas"].DataFrame = type("DataFrame", (), {})
+sys.modules["pandas"].Series = type("Series", (), {})
+if "requests" not in sys.modules:
+    _requests_stub = types.ModuleType("requests")
+    _requests_stub.RequestException = Exception
+    sys.modules["requests"] = _requests_stub
+elif not hasattr(sys.modules["requests"], "RequestException"):
+    sys.modules["requests"].RequestException = Exception
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
+sys.modules.setdefault("anthropic", types.SimpleNamespace(Anthropic=lambda *a, **k: None))
 sys.modules.setdefault("telegram_notifier", types.SimpleNamespace(
     send_message=lambda *a, **k: True, TELEGRAM_BOT_TOKEN="", TELEGRAM_CHAT_ID="",
     _api=lambda *a, **k: {}))
@@ -215,6 +225,77 @@ class TestCoreTrim(unittest.TestCase):
         cool = {t: {"rsi": 50, "drawdown": -3.0} for t in self.judged_hot}
         out = self.build(-8.0, 0.0, 0.20, cool, self.holdings)
         self.assertEqual(out, "")
+
+
+class TestDynamicCashTarget(unittest.TestCase):
+    """동적 현금 목표 사다리 (헌법 5조 신설, 2026.6) — 위험점수 → 현금 목표."""
+
+    def setUp(self):
+        from daily_report import calc_cash_target
+        self.calc = calc_cash_target
+
+    def test_base_target_when_calm(self):
+        self.assertEqual(self.calc(0), 0.20)
+        self.assertEqual(self.calc(2), 0.20)
+
+    def test_ladder_steps_up_with_risk(self):
+        self.assertEqual(self.calc(3), 0.25)
+        self.assertEqual(self.calc(5), 0.35)
+        self.assertEqual(self.calc(7), 0.45)
+        self.assertEqual(self.calc(9), 0.50)
+
+    def test_caps_at_50_for_extreme_risk(self):
+        self.assertEqual(self.calc(20), 0.50)
+
+
+class TestDynamicCashTrim(unittest.TestCase):
+    """동적 현금 목표 갭 — 점진적 익절 (헌법 7조 신설, 2026.6)."""
+
+    def setUp(self):
+        from core_trim import build_dynamic_cash_trim_section
+        self.build = build_dynamic_cash_trim_section
+        self.holdings = {"QQQM": 100, "SPMO": 50, "SPYM": 100, "GLDM": 50, "IBIT": 10}
+        self.judged_hot = {
+            "QQQM": {"rsi": 78, "drawdown": -2.0, "price": 100.0},
+            "SPMO": {"rsi": 74, "drawdown": -3.0, "price": 80.0},
+            "SPYM": {"rsi": 60, "drawdown": -1.0, "price": 90.0},
+            "GLDM": {"rsi": 40, "drawdown": -5.0, "price": 50.0},
+            "IBIT": {"rsi": 50, "drawdown": -8.0, "price": 60.0},
+        }
+
+    def test_no_action_when_target_still_base(self):
+        out = self.build(1, 0.18, 0.20, self.judged_hot, self.holdings, 100_000)
+        self.assertEqual(out, "")
+
+    def test_no_action_when_no_gap(self):
+        out = self.build(5, 0.40, 0.35, self.judged_hot, self.holdings, 100_000)
+        self.assertEqual(out, "")
+
+    def test_no_action_when_no_overheated_candidates(self):
+        cool = {t: {"rsi": 50, "drawdown": -3.0, "price": 100.0} for t in self.judged_hot}
+        out = self.build(5, 0.22, 0.35, cool, self.holdings, 100_000)
+        self.assertEqual(out, "")
+
+    def test_skips_overheated_still_at_high(self):
+        running = dict(self.judged_hot)
+        running["QQQM"] = {"rsi": 78, "drawdown": -0.3, "price": 100.0}
+        out = self.build(5, 0.22, 0.35, running, self.holdings, 100_000)
+        self.assertNotIn("QQQM", out)
+        self.assertIn("SPMO", out)
+
+    def test_trims_overheated_capped_per_report(self):
+        out = self.build(5, 0.22, 0.35, self.judged_hot, self.holdings, 100_000)
+        self.assertIn("QQQM", out)
+        self.assertIn("SPMO", out)
+        self.assertNotIn("SPYM", out)
+        self.assertIn("한도 5.0%p ($5,000)", out)
+        self.assertIn("다음 리포트에서 단계적으로", out)
+
+    def test_per_ticker_sell_capped(self):
+        """종목 1개당 보유 평가액의 15%까지만 매도 (포지션 유지)."""
+        out = self.build(5, 0.22, 0.35, self.judged_hot, self.holdings, 100_000)
+        # QQQM 100주 * $100 * 15% = $1,500
+        self.assertIn("$1,500", out)
 
 
 class TestReservoirStages(unittest.TestCase):

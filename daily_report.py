@@ -168,12 +168,13 @@ def calc_macro_risk_score(indicators: dict) -> tuple[int, list[str]]:
 
 
 def calc_cash_target(risk_score: int) -> float:
-    """현금(SGOV) 목표 비중 — 헌법 5조 기준 20% 고정.
-    위험 점수가 매우 높으면 소폭 상향(방어), 그 외엔 헌법값 유지."""
-    base = Config.CORE_ALLOCATION["SGOV"]  # 0.20
-    if risk_score >= 7:
-        return max(base, 0.25)
-    return base
+    """현금(SGOV) 목표 비중 — 평시 헌법 5조 20% 고정.
+    거시 위험점수가 쌓이면 config.CASH_TARGET_LADDER 단계로 상향(최대 50%)."""
+    target = Config.CORE_ALLOCATION["SGOV"]  # 0.20
+    for threshold, ratio in Config.CASH_TARGET_LADDER:
+        if risk_score >= threshold:
+            target = ratio
+    return target
 
 
 def check_extreme_overheated(ticker_data: dict) -> dict | None:
@@ -223,7 +224,9 @@ def build_cash_section(holdings: dict[str, float], idle_cash: float,
     diff_pct = (ratio - target_ratio) * 100
     diff_usd = cash_value - target_value
 
-    if risk_score >= 7:
+    if risk_score >= 9:
+        target_label = f"🔴 {target_ratio*100:.0f}%  (위험 {risk_score}점 — 최대 방어)"
+    elif risk_score >= 7:
         target_label = f"🔴 {target_ratio*100:.0f}%  (위험 {risk_score}점 — 방어)"
     elif risk_score >= 5:
         target_label = f"🟠 {target_ratio*100:.0f}%  (위험 {risk_score}점)"
@@ -1703,6 +1706,16 @@ def build_report() -> str:
         if trim_section:
             lines.append("\n" + "━" * 28)
             lines.append(trim_section)
+
+        # ── [3-d] 동적 현금 목표 갭 — 점진적 익절 (2026.6 신설) ──
+        # 위험점수로 현금 목표가 헌법값(20%) 위로 올라갔을 때만 동작.
+        dynamic_target = calc_cash_target(risk_score)
+        dyn_trim_section = core_trim.build_dynamic_cash_trim_section(
+            risk_score, cash_ratio, dynamic_target, judged, holdings, _total_portfolio,
+        )
+        if dyn_trim_section:
+            lines.append("\n" + "━" * 28)
+            lines.append(dyn_trim_section)
     except Exception as e:
         print(f"[core_trim] {e}")
 
