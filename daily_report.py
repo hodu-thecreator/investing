@@ -575,40 +575,72 @@ def fetch_market_news() -> list[dict]:
     return news_items[:8]
 
 
-def generate_news_commentary(news_items: list[dict], mkt_score: int, mkt_reasons: list[str]) -> str:
-    """Claude로 뉴스 요약 + 투자 대응 포인트 생성"""
+def generate_news_commentary(
+    news_items: list[dict], mkt_score: int, mkt_reasons: list[str],
+    indicators: dict | None = None,
+) -> str:
+    """오늘 시장이 '왜' 이렇게 움직였는지 — 지표 변화와 뉴스를 인과로 엮어 해설 + 기사 링크."""
     if not news_items:
         return ""
 
-    news_text = "\n".join(
-        f"- {it['title']}" + (f": {it['summary']}" if it["summary"] else "")
-        for it in news_items
-    )
-    mkt_ctx = f"시장 점수 {mkt_score:+d}" + (
-        f" ({', '.join(mkt_reasons)})" if mkt_reasons else ""
-    )
+    # 번호 매긴 뉴스 (Claude가 [n]으로 인용 → 하단 출처 링크와 매핑)
+    numbered = []
+    for i, it in enumerate(news_items[:6], 1):
+        line = f"[{i}] {it['title']}"
+        if it.get("summary"):
+            line += f" — {it['summary']}"
+        numbered.append(line)
+    news_text = "\n".join(numbered)
 
-    prompt = f"""오늘의 주요 시장 뉴스:
+    # 오늘의 지표 스냅샷 — 인과 해설의 '결과' 쪽 근거
+    ctx_bits = [f"시장점수 {mkt_score:+d}"]
+    if indicators:
+        vix = indicators.get("vix", {})
+        if not vix.get("error") and vix.get("current") is not None:
+            chg = vix.get("change")
+            ctx_bits.append(f"VIX {vix['current']}" + (f"({chg:+})" if chg is not None else ""))
+        fg = indicators.get("fear_greed", {})
+        if not fg.get("error") and fg.get("score") is not None:
+            wa = fg.get("week_ago")
+            ctx_bits.append(f"공포탐욕 {fg['score']}" + (f"(1주 전 {wa})" if wa else ""))
+    mkt_ctx = " · ".join(ctx_bits)
+
+    prompt = f"""오늘 미국 시장 지표: {mkt_ctx}
+
+오늘의 주요 뉴스 (번호=출처):
 {news_text}
 
-현재 시장 상황: {mkt_ctx}
+위 지표가 '왜' 이렇게 움직였는지, 원인을 뉴스에서 찾아 인과로 설명해줘.
+텔레그램 HTML로 아래 형식 정확히 지켜서:
 
-다음 두 파트를 텔레그램 HTML 형식으로 간결하게 작성해주세요:
+<b>📰 오늘 시장이 이렇게 움직인 이유</b>
+• [원인 → 결과] 한 문장. 근거 뉴스 번호를 문장 끝에 [n]으로 표기.
+  예: "Fed 위원 매파 발언으로 금리 인하 기대 후퇴 → 위험자산 매도 [2]"
+• 2~4개만. 확실치 않으면 "~로 보임"으로 명시.
 
-<b>📰 오늘의 주요 이슈</b>
-• 이슈 1
-• 이슈 2
-• 이슈 3
+규칙: 군더더기·일반론 금지(인과만). 근거가 약한 줄은 통째로 생략. 한국어."""
 
-<b>🛡 투자 대응 포인트</b>
-• 대응 1
-• 대응 2
-
-총 10줄 이내. 한국어."""
-
-    result = claude_client.call(prompt, max_tokens=512)
+    result = claude_client.call(prompt, max_tokens=600)
     if not result:
         print("[news_commentary] Claude 응답 없음")
+        return ""
+
+    # Claude가 인용한 [n]만 골라 실제 기사 링크로 매핑 (없으면 상위 3개)
+    cited = sorted({int(n) for n in re.findall(r"\[(\d+)\]", result)
+                    if 1 <= int(n) <= len(news_items)})
+    show = cited or list(range(1, min(3, len(news_items)) + 1))
+    src_lines = []
+    for i in show:
+        it = news_items[i - 1]
+        link = it.get("link")
+        if not link:
+            continue
+        title = it["title"][:50].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        link_esc = link.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        src_lines.append(f'  [{i}] <a href="{link_esc}">{title}</a>')
+
+    if src_lines:
+        result = result.rstrip() + "\n\n<b>📎 출처</b>\n" + "\n".join(src_lines)
     return result
 
 
@@ -1134,7 +1166,6 @@ def build_milestone_section(total_portfolio: float) -> str:
 
     if achieved:
         lines.append(f"  <i>달성: {' · '.join(f'${m[0]//1000}K' for m in achieved)}</i>")
-    lines.append("  <i>비교는 5년 전 호두와만. SNS 자산 자랑 무시.</i>")
     return "\n".join(lines)
 
 
@@ -1543,7 +1574,7 @@ def build_report() -> str:
 
     # ── Claude 섹션 (뉴스 해설 + 포트폴리오 점검) ─────────────────
     news_items = fetch_market_news()
-    commentary = generate_news_commentary(news_items, mkt_score, mkt_reasons)
+    commentary = generate_news_commentary(news_items, mkt_score, mkt_reasons, indicators)
     if commentary:
         lines.append("\n" + "━" * 28)
         lines.append(commentary)
@@ -1643,8 +1674,7 @@ def build_report() -> str:
         lines.append("<b>🆕 새 종목 매수 감지</b>")
         for t, q in sorted(new_held):
             lines.append(f"  • <b>{t}</b>  {q:g}주")
-        lines.append("  <i>아직 목표 비중에 없는 종목 — 비중·전략 재설계가 필요함.")
-        lines.append("  봇 세션에서 \"새 종목 반영해줘\"라고 요청하면 전체 파이를 다시 짬.</i>")
+        lines.append("  <i>봇 세션에서 \"새 종목 반영해줘\"라고 하면 전체 파이를 다시 짬.</i>")
 
     # ── [2-c] 개별주 워치 (정보용 — 이 계좌는 매수 안 함, 헌법 4조) ──
     watchlist = getattr(_config, "INDIVIDUAL_WATCHLIST", [])
@@ -1652,7 +1682,7 @@ def build_report() -> str:
         try:
             import reservoir
             lines.append("\n" + "━" * 28)
-            lines.append("<b>👀 개별주 워치</b>  <i>(정보용 — 이 계좌는 매수 안 함)</i>")
+            lines.append("<b>👀 개별주 워치</b>  <i>(아내 별도 계좌 매수 가이드)</i>")
             for t in watchlist:
                 r = judge_ticker(t, mkt_score)
                 price = r.get("price")
@@ -1808,7 +1838,6 @@ def build_report() -> str:
                         note = sgov_buy_note()
                         if note:
                             lines.append(note)
-                lines.append("  <i>→ 언더웨이트부터 채워 목표 비중으로 수렴</i>")
     except Exception as e:
         print(f"[reinvest_plan] {e}")
 
@@ -1857,17 +1886,6 @@ def build_report() -> str:
     except Exception as e:
         print(f"[kr_tax] {e}")
 
-    # ── [11-b] 자산 추이 (1주/1개월/1년 전 대비, ATH 워터마크) ────
-    try:
-        import asset_history
-        history = asset_history.record_snapshot(_total_portfolio)
-        hist_section = asset_history.build_asset_history_section(_total_portfolio, history)
-        if hist_section:
-            lines.append("\n" + "━" * 28)
-            lines.append(hist_section)
-    except Exception as e:
-        print(f"[asset_history] {e}")
-
     # ── [12] 마일스톤 진행률 (동기 부여 — 클로저) ─────────────────
     try:
         ms_section = build_milestone_section(_total_portfolio)
@@ -1876,20 +1894,6 @@ def build_report() -> str:
             lines.append(ms_section)
     except Exception as e:
         print(f"[milestone] {e}")
-
-    # ── [13] 거주국 로드맵 (헌법 1·9조 — phase 전환 D-day + 레거시 정리) ──
-    try:
-        import residency_roadmap
-        roadmap_state = calc_portfolio_state(holdings, idle_cash) if _total_portfolio > 0 else None
-        roadmap_section = residency_roadmap.build_roadmap_section(roadmap_state)
-        if roadmap_section:
-            lines.append("\n" + "━" * 28)
-            lines.append(roadmap_section)
-    except Exception as e:
-        print(f"[residency_roadmap] {e}")
-
-    lines.append("\n" + "━" * 28)
-    lines.append("🤖 <i>Stock Agent — 평일 미국 장 오픈 후 30분 자동 발송 (DST 자동 반영)</i>")
 
     return "\n".join(lines)
 
